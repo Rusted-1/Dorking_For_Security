@@ -1,0 +1,30 @@
+# Dorker run configuration.
+
+keywords_file = "keywords.json"
+output_dir = "out"
+
+[fetch]
+# Politeness controls. Keep delay_ms reasonably high so you never hammer a host.
+delay_ms = 1500
+timeout_secs = 20
+user_agent = "Dorker/0.1 (+anti-fraud research; put a real contact address here)"
+respect_robots = true
+
+# --- Candidate source -------------------------------------------------------
+# Option A (works out of the box, no API key): check a local list of URLs.
+[source]
+kind = "url_list"
+path = "candidates.txt"
+
+# Option B: discover candidates through the Google Programmable Search API.
+# Comment out the block above and uncomment this one once you have a key + cx.
+# [source]
+# kind = "search_api"
+# provider = "google_cse"
+# api_key = "YOUR_API_KEY"
+# cx = "YOUR_SEARCH_ENGINE_ID"
+# max_results = 50
+# queries = [
+#   "\"act now to avoid suspension\"",
+#   "\"pay with gift cards\" intitle:verify",
+# ]

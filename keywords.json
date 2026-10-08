@@ -1,0 +1,20 @@
+{
+  "keywords": [
+    {
+      "id": "example-urgency",
+      "phrase": "act now to avoid suspension",
+      "category": "pressure-tactics"
+    },
+    {
+      "id": "example-giftcard",
+      "phrase": "pay with gift cards",
+      "category": "payment-redflag"
+    },
+    {
+      "id": "example-account-regex",
+      "phrase": "account #\\d{4,}",
+      "category": "account-reference",
+      "regex": true
+    }
+  ]
+}

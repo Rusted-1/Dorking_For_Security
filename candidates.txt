@@ -1,0 +1,5 @@
+# Candidate URLs to check, one per line.
+# Blank lines and lines starting with '#' are ignored.
+# In a controlled/training environment these are typically your sandbox URLs.
+#
+# https://example.com/some-page

@@ -1,0 +1,6 @@
+/target
+/out
+Cargo.lock
+# Keep your real keyword list and live config out of version control if sensitive:
+# keywords.local.json
+# config.local.toml
