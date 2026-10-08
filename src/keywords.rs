@@ -1,6 +1,6 @@
 //! Keyword loading and matching.
 
-use crate::model::{Keyword, KeywordFile, KeywordHit};
+use crate::model::{Keyword, KeywordFile, KeywordHit, Target};
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::path::Path;
@@ -20,7 +20,7 @@ struct Compiled {
     lower_phrase: String,
 }
 
-/// Matches a body of text against a set of keywords.
+/// Matches content and URLs against a set of keywords.
 pub struct Matcher {
     keywords: Vec<Compiled>,
 }
@@ -51,20 +51,37 @@ impl Matcher {
         self.keywords.is_empty()
     }
 
-    /// Return every keyword that appears in `text`.
-    pub fn find(&self, text: &str) -> Vec<KeywordHit> {
-        let lower = text.to_lowercase();
+    /// How many keywords target the URL vs. page content.
+    pub fn counts(&self) -> (usize, usize) {
+        let url = self
+            .keywords
+            .iter()
+            .filter(|c| c.kw.target == Target::Url)
+            .count();
+        (self.keywords.len() - url, url)
+    }
+
+    /// Find every keyword hit, checking content keywords against `text` and
+    /// URL keywords against `url`.
+    pub fn find(&self, url: &str, text: &str) -> Vec<KeywordHit> {
+        let lower_text = text.to_lowercase();
+        let lower_url = url.to_lowercase();
         let mut hits = Vec::new();
         for c in &self.keywords {
+            let (haystack, lower_haystack) = match c.kw.target {
+                Target::Content => (text, &lower_text),
+                Target::Url => (url, &lower_url),
+            };
             let start = match &c.re {
-                Some(re) => re.find(text).map(|m| m.start()),
-                None => lower.find(&c.lower_phrase),
+                Some(re) => re.find(haystack).map(|m| m.start()),
+                None => lower_haystack.find(&c.lower_phrase),
             };
             if let Some(start) = start {
                 hits.push(KeywordHit {
                     keyword_id: c.kw.id.clone(),
                     category: c.kw.category.clone(),
-                    snippet: snippet(text, start, 90),
+                    matched_in: c.kw.target.label(),
+                    snippet: snippet(haystack, start, 90),
                 });
             }
         }
@@ -103,34 +120,45 @@ fn ceil_boundary(s: &str, mut i: usize) -> usize {
 mod tests {
     use super::*;
 
-    fn kw(id: &str, phrase: &str, regex: bool) -> Keyword {
+    fn kw(id: &str, phrase: &str, regex: bool, target: Target) -> Keyword {
         Keyword {
             id: id.into(),
             phrase: phrase.into(),
             category: None,
             regex,
+            target,
         }
     }
 
     #[test]
     fn matches_case_insensitive_substring() {
-        let m = Matcher::new(vec![kw("urgency", "Act Now", false)]).unwrap();
-        let hits = m.find("Please ACT NOW before your account closes.");
+        let m = Matcher::new(vec![kw("urgency", "Act Now", false, Target::Content)]).unwrap();
+        let hits = m.find("http://x/", "Please ACT NOW before your account closes.");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].keyword_id, "urgency");
-        assert!(hits[0].snippet.to_lowercase().contains("act now"));
+        assert_eq!(hits[0].matched_in, "content");
     }
 
     #[test]
     fn no_false_positive() {
-        let m = Matcher::new(vec![kw("giftcard", "pay with gift cards", false)]).unwrap();
-        assert!(m.find("A normal page about nothing in particular.").is_empty());
+        let m = Matcher::new(vec![kw("giftcard", "pay with gift cards", false, Target::Content)]).unwrap();
+        assert!(m.find("http://x/", "A normal page about nothing.").is_empty());
     }
 
     #[test]
     fn regex_mode() {
-        let m = Matcher::new(vec![kw("acct", r"account #\d{4,}", true)]).unwrap();
-        let hits = m.find("your account #12345 is suspended");
-        assert_eq!(hits.len(), 1);
+        let m = Matcher::new(vec![kw("acct", r"account #\d{4,}", true, Target::Content)]).unwrap();
+        assert_eq!(m.find("http://x/", "your account #12345 is suspended").len(), 1);
+    }
+
+    #[test]
+    fn url_target_matches_url_not_content() {
+        let m = Matcher::new(vec![kw("reg", "/user/register", false, Target::Url)]).unwrap();
+        let hit = m.find("https://scam.example/user/register", "nothing relevant here");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].matched_in, "url");
+        // A content keyword must not match text that only appears in the URL.
+        let m2 = Matcher::new(vec![kw("reg", "register", false, Target::Content)]).unwrap();
+        assert!(m2.find("https://scam.example/register", "clean body").is_empty());
     }
 }

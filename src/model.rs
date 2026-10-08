@@ -2,10 +2,31 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Where a keyword is matched: against page content, or against the URL itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Target {
+    /// Match against the page's visible text (default).
+    #[default]
+    Content,
+    /// Match against the candidate URL string (an `inurl:`-style filter).
+    Url,
+}
+
+impl Target {
+    pub fn label(self) -> &'static str {
+        match self {
+            Target::Content => "content",
+            Target::Url => "url",
+        }
+    }
+}
+
 /// A single keyword / fingerprint to look for.
 ///
 /// `phrase` is matched case-insensitively as a substring by default. If
 /// `regex` is true, `phrase` is treated as a regular expression instead.
+/// `target` chooses whether it is matched against page content or the URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keyword {
     pub id: String,
@@ -14,6 +35,8 @@ pub struct Keyword {
     pub category: Option<String>,
     #[serde(default)]
     pub regex: bool,
+    #[serde(default)]
+    pub target: Target,
 }
 
 /// Top-level shape of the keywords data file (`keywords.json`).
@@ -22,11 +45,12 @@ pub struct KeywordFile {
     pub keywords: Vec<Keyword>,
 }
 
-/// One keyword that was found on a page, with a bit of surrounding context.
+/// One keyword that was found, with a bit of surrounding context.
 #[derive(Debug, Clone, Serialize)]
 pub struct KeywordHit {
     pub keyword_id: String,
     pub category: Option<String>,
+    pub matched_in: &'static str,
     pub snippet: String,
 }
 

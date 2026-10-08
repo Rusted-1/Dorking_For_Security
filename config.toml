@@ -25,6 +25,14 @@ path = "candidates.txt"
 # cx = "YOUR_SEARCH_ENGINE_ID"
 # max_results = 50
 # queries = [
-#   "\"act now to avoid suspension\"",
-#   "\"pay with gift cards\" intitle:verify",
+#   "\"Dedicated to innovating\" inurl:register",
+#   "\"The Financial Ecosystem\" inurl:\"/user/register\"",
+#   "\"Investing the Better Way\" inurl:\"a=signup\"",
+#   "\"Cloud Mining\" \"Crypto Mining\" inurl:register",
 # ]
+#
+# NOTE: the Google Custom Search JSON API honors `inurl:` less reliably than
+# regular Google web search, so combine it with a distinctive fingerprint
+# phrase rather than relying on `inurl:` alone. The URL-pattern keywords in
+# keywords.json (target = "url") apply the same signup/register filter at the
+# verification stage, which works regardless of how candidates were found.

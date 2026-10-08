@@ -62,7 +62,13 @@ async fn run_scan(config_path: &Path) -> Result<()> {
     if matcher.is_empty() {
         anyhow::bail!("no keywords loaded from {}", cfg.keywords_file);
     }
-    println!("Loaded {} keyword(s).", matcher.len());
+    let (content_kw, url_kw) = matcher.counts();
+    println!(
+        "Loaded {} keyword(s): {} content, {} url.",
+        matcher.len(),
+        content_kw,
+        url_kw
+    );
 
     let client = http::build_client(&cfg.fetch)?;
 
@@ -85,7 +91,7 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
     let kws = keywords::load_keywords(keywords_path)?;
     let matcher = keywords::Matcher::new(kws)?;
 
-    let (label, html) = match (url, file) {
+    let (label, url_for_match, html) = match (url, file) {
         (Some(u), None) => {
             let cfg = config::FetchConfig::default();
             let client = http::build_client(&cfg)?;
@@ -97,18 +103,18 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
                 .text()
                 .await
                 .context("reading body")?;
-            (u, body)
+            (u.clone(), u, body)
         }
         (None, Some(f)) => {
             let body = std::fs::read_to_string(&f)
                 .with_context(|| format!("reading {}", f.display()))?;
-            (f.display().to_string(), body)
+            (f.display().to_string(), String::new(), body)
         }
         _ => anyhow::bail!("pass exactly one of --url or --file"),
     };
 
     let text = verify::extract_text(&html);
-    let hits = matcher.find(&text);
+    let hits = matcher.find(&url_for_match, &text);
 
     println!("Checked: {label}");
     if hits.is_empty() {
@@ -117,7 +123,7 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
         println!("{} hit(s):", hits.len());
         for h in hits {
             let cat = h.category.as_deref().unwrap_or("-");
-            println!("  [{}] ({})  …{}…", h.keyword_id, cat, h.snippet);
+            println!("  [{}] ({}, in:{})  …{}…", h.keyword_id, cat, h.matched_in, h.snippet);
         }
     }
     Ok(())

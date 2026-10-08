@@ -60,7 +60,7 @@ async fn verify_one(
             match resp.text().await {
                 Ok(body) => {
                     let text = extract_text(&body);
-                    let hits = matcher.find(&text);
+                    let hits = matcher.find(raw_url, &text);
                     SiteResult {
                         url: raw_url.to_string(),
                         fetched: true,

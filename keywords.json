@@ -17,6 +17,10 @@
     { "id": "investing-the-better-way", "phrase": "Investing the Better Way", "category": "tagline" },
     { "id": "investment-strategies-for-professionals", "phrase": "Investment Strategies for Professionals", "category": "tagline" },
     { "id": "innovative-solutions-institutional-investors", "phrase": "Innovative solutions for institutional investors", "category": "tagline" },
-    { "id": "best-trading-platform", "phrase": "Best Trading Platform", "category": "trading" }
+    { "id": "best-trading-platform", "phrase": "Best Trading Platform", "category": "trading" },
+
+    { "id": "url-a-signup", "phrase": "a=signup", "category": "signup-url", "target": "url" },
+    { "id": "url-user-register", "phrase": "/user/register", "category": "signup-url", "target": "url" },
+    { "id": "url-register", "phrase": "register", "category": "signup-url", "target": "url" }
   ]
 }

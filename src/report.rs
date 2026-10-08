@@ -48,7 +48,7 @@ pub fn render_text(report: &Report) -> String {
         }
         for h in &r.hits {
             let cat = h.category.as_deref().unwrap_or("-");
-            out.push_str(&format!("  [{}] ({})\n", h.keyword_id, cat));
+            out.push_str(&format!("  [{}] ({}, in:{})\n", h.keyword_id, cat, h.matched_in));
             out.push_str(&format!("      …{}…\n", h.snippet));
         }
     }
