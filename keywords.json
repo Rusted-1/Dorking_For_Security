@@ -1,20 +1,22 @@
 {
   "keywords": [
-    {
-      "id": "example-urgency",
-      "phrase": "act now to avoid suspension",
-      "category": "pressure-tactics"
-    },
-    {
-      "id": "example-giftcard",
-      "phrase": "pay with gift cards",
-      "category": "payment-redflag"
-    },
-    {
-      "id": "example-account-regex",
-      "phrase": "account #\\d{4,}",
-      "category": "account-reference",
-      "regex": true
-    }
+    { "id": "dedicated-to-innovating", "phrase": "Dedicated to innovating", "category": "tagline" },
+    { "id": "investment-platform", "phrase": "Investment Platform", "category": "generic-investment" },
+    { "id": "investment-company", "phrase": "Investment Company", "category": "generic-investment" },
+    { "id": "cfd-trading", "phrase": "CFD Trading", "category": "trading" },
+    { "id": "crypto-investment", "phrase": "Crypto Investment", "category": "crypto" },
+    { "id": "bitcoin-investment", "phrase": "Bitcoin Investment", "category": "crypto" },
+    { "id": "binary-options", "phrase": "Binary Options", "category": "trading" },
+    { "id": "trading-investment", "phrase": "Trading Investment", "category": "trading-ambiguous" },
+    { "id": "cryptocurrency-investment", "phrase": "Cryptocurrency Investment", "category": "crypto" },
+    { "id": "smart-investment", "phrase": "Smart Investment", "category": "marketing" },
+    { "id": "cloud-mining", "phrase": "Cloud Mining", "category": "mining" },
+    { "id": "crypto-mining", "phrase": "Crypto Mining", "category": "mining" },
+    { "id": "mining-platform", "phrase": "Mining Platform", "category": "mining" },
+    { "id": "the-financial-ecosystem", "phrase": "The Financial Ecosystem", "category": "tagline" },
+    { "id": "investing-the-better-way", "phrase": "Investing the Better Way", "category": "tagline" },
+    { "id": "investment-strategies-for-professionals", "phrase": "Investment Strategies for Professionals", "category": "tagline" },
+    { "id": "innovative-solutions-institutional-investors", "phrase": "Innovative solutions for institutional investors", "category": "tagline" },
+    { "id": "best-trading-platform", "phrase": "Best Trading Platform", "category": "trading" }
   ]
 }
