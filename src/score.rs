@@ -35,14 +35,40 @@ pub fn certainty(weight_total: u32) -> u32 {
     (s.round() as u32).clamp(1, 100)
 }
 
-/// A human label for a score.
+/// A human label for a score (6-level scale, aligned with the color bands).
 pub fn band(score: u32) -> &'static str {
     match score {
         0 => "none",
-        1..=24 => "Low",
-        25..=49 => "Medium",
-        50..=74 => "High",
-        _ => "Very High",
+        1..=25 => "Very unlikely",
+        26..=50 => "Unlikely",
+        51..=75 => "Possible",
+        76..=85 => "Likely",
+        86..=90 => "Very likely",
+        _ => "Almost certain", // 91..=100
+    }
+}
+
+/// ANSI color-escape prefix for a score band. Pair with [`RESET`].
+pub fn ansi(score: u32) -> &'static str {
+    match score {
+        0 => "",
+        1..=25 => "\x1b[31m",        // red
+        26..=50 => "\x1b[38;5;208m", // orange
+        51..=75 => "\x1b[33m",       // yellow
+        76..=85 => "\x1b[38;5;120m", // light green
+        86..=90 => "\x1b[38;5;28m",  // dark green
+        _ => "\x1b[5;92m",           // flashing bright green (91-100)
+    }
+}
+
+pub const RESET: &str = "\x1b[0m";
+
+/// Format `score`/100 and its label, colored when `use_color` is true.
+pub fn tag(score: u32, use_color: bool) -> String {
+    if use_color {
+        format!("{}{:>3}/100 {}{}", ansi(score), score, band(score), RESET)
+    } else {
+        format!("{:>3}/100 {}", score, band(score))
     }
 }
 

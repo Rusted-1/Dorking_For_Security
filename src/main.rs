@@ -14,14 +14,35 @@ mod sources;
 mod verify;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "dorker", version, about)]
 struct Cli {
+    /// When to colorize terminal output.
+    #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
+    color: ColorWhen,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum ColorWhen {
+    Auto,
+    Always,
+    Never,
+}
+
+fn use_color(when: ColorWhen) -> bool {
+    use std::io::IsTerminal;
+    match when {
+        ColorWhen::Always => true,
+        ColorWhen::Never => false,
+        ColorWhen::Auto => {
+            std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -46,17 +67,18 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let color = use_color(cli.color);
     match cli.cmd {
-        Cmd::Scan { config } => run_scan(&config).await,
+        Cmd::Scan { config } => run_scan(&config, color).await,
         Cmd::Check {
             url,
             file,
             keywords,
-        } => run_check(url, file, &keywords).await,
+        } => run_check(url, file, &keywords, color).await,
     }
 }
 
-async fn run_scan(config_path: &Path) -> Result<()> {
+async fn run_scan(config_path: &Path, color: bool) -> Result<()> {
     let cfg = config::load_config(config_path)?;
     let kws = keywords::load_keywords(Path::new(&cfg.keywords_file))?;
     let matcher = keywords::Matcher::new(kws)?;
@@ -85,11 +107,20 @@ async fn run_scan(config_path: &Path) -> Result<()> {
     report::write_report(&report, &out_dir)?;
 
     println!("{}", report::console_summary(&report));
-    println!("Report written to {}/report.json and {}/report.txt", cfg.output_dir, cfg.output_dir);
+    println!("{}", report::console_ranked(&report, color));
+    println!(
+        "Report written to {}/report.json and {}/report.txt",
+        cfg.output_dir, cfg.output_dir
+    );
     Ok(())
 }
 
-async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &Path) -> Result<()> {
+async fn run_check(
+    url: Option<String>,
+    file: Option<PathBuf>,
+    keywords_path: &Path,
+    color: bool,
+) -> Result<()> {
     let kws = keywords::load_keywords(keywords_path)?;
     let matcher = keywords::Matcher::new(kws)?;
 
@@ -133,7 +164,7 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
     } else {
         let total: u32 = hits.iter().map(|h| h.weight).sum();
         let s = score::certainty(total);
-        println!("Score: {}/100 ({})", s, score::band(s));
+        println!("Score: {}", score::tag(s, color));
         println!("{} hit(s):", hits.len());
         for h in hits {
             let cat = h.category.as_deref().unwrap_or("-");

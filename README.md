@@ -86,6 +86,20 @@ diminishing returns.
 | `terminology` | 2 |
 | (anything else) | 3 |
 
-Bands: **Low** 1–24, **Medium** 25–49, **High** 50–74, **Very High** 75–100.
+Scores map to a 6-level label and a terminal color:
 
-Weights and the curve constant live in `src/score.rs` and are easy to tune.
+| Score | Color | Label |
+|---|---|---|
+| 1–25 | red | Very unlikely |
+| 26–50 | orange | Unlikely |
+| 51–75 | yellow | Possible |
+| 76–85 | light green | Likely |
+| 86–90 | dark green | Very likely |
+| 91–100 | flashing green | Almost certain |
+
+Color is applied to terminal output. Control it with `--color auto|always|never`
+(default `auto`: colored only when writing to a terminal and `NO_COLOR` is
+unset). The saved `report.txt` always uses plain text (number + label).
+
+Weights, the curve constant, and the bands live in `src/score.rs` and are easy
+to tune.

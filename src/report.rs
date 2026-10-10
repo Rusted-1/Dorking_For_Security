@@ -132,16 +132,28 @@ pub fn render_text(report: &Report) -> String {
     out
 }
 
-/// Short summary for stdout.
+/// Short summary line for stdout.
 pub fn console_summary(report: &Report) -> String {
-    let top = report
+    let excluded = report.results.iter().filter(|r| r.excluded).count();
+    format!(
+        "Checked {} candidate(s); {} with hits, {} excluded.",
+        report.total_candidates, report.sites_with_hits, excluded
+    )
+}
+
+/// A ranked, optionally-colored list of scored sites for the terminal.
+pub fn console_ranked(report: &Report, use_color: bool) -> String {
+    let sites: Vec<&SiteResult> = report
         .results
         .iter()
-        .find(|r| !r.excluded && !r.hits.is_empty())
-        .map(|r| format!(" Top: {}/100 ({}) {}", r.score, score::band(r.score), r.url))
-        .unwrap_or_default();
-    format!(
-        "Checked {} candidate(s); {} had keyword hits.{}",
-        report.total_candidates, report.sites_with_hits, top
-    )
+        .filter(|r| !r.excluded && !r.hits.is_empty())
+        .collect();
+    if sites.is_empty() {
+        return "No (non-excluded) sites with hits.".to_string();
+    }
+    let mut out = String::from("Ranked results (most certain first):\n");
+    for r in sites {
+        out.push_str(&format!("  {}  {}\n", score::tag(r.score, use_color), r.url));
+    }
+    out
 }
