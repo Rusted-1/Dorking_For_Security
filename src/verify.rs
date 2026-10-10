@@ -25,6 +25,17 @@ pub async fn verify_sites(
     results
 }
 
+fn failure(url: &str, status: Option<u16>, error: String) -> SiteResult {
+    SiteResult {
+        url: url.to_string(),
+        fetched: false,
+        status,
+        error: Some(error),
+        score: 0,
+        hits: vec![],
+    }
+}
+
 async fn verify_one(
     raw_url: &str,
     matcher: &Matcher,
@@ -33,25 +44,11 @@ async fn verify_one(
 ) -> SiteResult {
     let parsed = match Url::parse(raw_url) {
         Ok(u) => u,
-        Err(e) => {
-            return SiteResult {
-                url: raw_url.to_string(),
-                fetched: false,
-                status: None,
-                error: Some(format!("invalid url: {e}")),
-                hits: vec![],
-            }
-        }
+        Err(e) => return failure(raw_url, None, format!("invalid url: {e}")),
     };
 
     if cfg.respect_robots && !robots_allows(client, &parsed, &cfg.user_agent).await {
-        return SiteResult {
-            url: raw_url.to_string(),
-            fetched: false,
-            status: None,
-            error: Some("skipped: disallowed by robots.txt".to_string()),
-            hits: vec![],
-        };
+        return failure(raw_url, None, "skipped: disallowed by robots.txt".to_string());
     }
 
     match client.get(parsed).send().await {
@@ -66,33 +63,19 @@ async fn verify_one(
                         fetched: true,
                         status: Some(status),
                         error: None,
+                        score: 0, // filled in by report::build_report
                         hits,
                     }
                 }
-                Err(e) => SiteResult {
-                    url: raw_url.to_string(),
-                    fetched: false,
-                    status: Some(status),
-                    error: Some(format!("reading body: {e}")),
-                    hits: vec![],
-                },
+                Err(e) => failure(raw_url, Some(status), format!("reading body: {e}")),
             }
         }
-        Err(e) => SiteResult {
-            url: raw_url.to_string(),
-            fetched: false,
-            status: None,
-            error: Some(format!("request failed: {e}")),
-            hits: vec![],
-        },
+        Err(e) => failure(raw_url, None, format!("request failed: {e}")),
     }
 }
 
 /// Extract visible text from an HTML document (also works on plain text).
 pub fn extract_text(html: &str) -> String {
     let doc = Html::parse_document(html);
-    doc.root_element()
-        .text()
-        .collect::<Vec<_>>()
-        .join(" ")
+    doc.root_element().text().collect::<Vec<_>>().join(" ")
 }

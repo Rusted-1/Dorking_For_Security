@@ -1,6 +1,7 @@
 //! Keyword loading and matching.
 
 use crate::model::{Keyword, KeywordFile, KeywordHit, Target};
+use crate::score;
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::path::Path;
@@ -18,6 +19,7 @@ struct Compiled {
     kw: Keyword,
     re: Option<Regex>,
     lower_phrase: String,
+    weight: u32,
 }
 
 /// Matches content and URLs against a set of keywords.
@@ -34,11 +36,25 @@ impl Matcher {
                     Regex::new(&kw.phrase)
                         .with_context(|| format!("invalid regex for keyword '{}'", kw.id))?,
                 )
+            } else if kw.whole_word {
+                let pat = format!(r"(?i)\b{}\b", regex::escape(&kw.phrase));
+                Some(
+                    Regex::new(&pat)
+                        .with_context(|| format!("building whole-word regex for '{}'", kw.id))?,
+                )
             } else {
                 None
             };
             let lower_phrase = kw.phrase.to_lowercase();
-            compiled.push(Compiled { kw, re, lower_phrase });
+            let weight = kw
+                .weight
+                .unwrap_or_else(|| score::default_weight(kw.category.as_deref()));
+            compiled.push(Compiled {
+                kw,
+                re,
+                lower_phrase,
+                weight,
+            });
         }
         Ok(Self { keywords: compiled })
     }
@@ -81,6 +97,7 @@ impl Matcher {
                     keyword_id: c.kw.id.clone(),
                     category: c.kw.category.clone(),
                     matched_in: c.kw.target.label(),
+                    weight: c.weight,
                     snippet: snippet(haystack, start, 90),
                 });
             }
@@ -126,8 +143,30 @@ mod tests {
             phrase: phrase.into(),
             category: None,
             regex,
+            whole_word: false,
             target,
+            weight: None,
         }
+    }
+
+    fn word_kw(id: &str, phrase: &str) -> Keyword {
+        Keyword {
+            id: id.into(),
+            phrase: phrase.into(),
+            category: None,
+            regex: false,
+            whole_word: true,
+            target: Target::Content,
+            weight: None,
+        }
+    }
+
+    #[test]
+    fn whole_word_avoids_substring_false_positives() {
+        let m = Matcher::new(vec![word_kw("coin", "coin")]).unwrap();
+        // Must NOT match inside "bitcoin"; MUST match the standalone word.
+        assert!(m.find("http://x/", "I love bitcoin trading").is_empty());
+        assert_eq!(m.find("http://x/", "buy a coin today").len(), 1);
     }
 
     #[test]

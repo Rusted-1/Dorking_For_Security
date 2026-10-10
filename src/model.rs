@@ -35,8 +35,14 @@ pub struct Keyword {
     pub category: Option<String>,
     #[serde(default)]
     pub regex: bool,
+    /// Match only on whole-word boundaries (good for short, generic terms).
+    #[serde(default)]
+    pub whole_word: bool,
     #[serde(default)]
     pub target: Target,
+    /// Override the category's default scoring weight.
+    #[serde(default)]
+    pub weight: Option<u32>,
 }
 
 /// Top-level shape of the keywords data file (`keywords.json`).
@@ -51,6 +57,7 @@ pub struct KeywordHit {
     pub keyword_id: String,
     pub category: Option<String>,
     pub matched_in: &'static str,
+    pub weight: u32,
     pub snippet: String,
 }
 
@@ -61,6 +68,8 @@ pub struct SiteResult {
     pub fetched: bool,
     pub status: Option<u16>,
     pub error: Option<String>,
+    /// Certainty that this is a scam-template page, 1-100 (0 = no hits).
+    pub score: u32,
     pub hits: Vec<KeywordHit>,
 }
 

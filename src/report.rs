@@ -1,11 +1,20 @@
 //! Organize results into a report (JSON + readable text) and a console summary.
 
 use crate::model::{Report, SiteResult};
+use crate::score;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub fn build_report(results: Vec<SiteResult>) -> Report {
+pub fn build_report(mut results: Vec<SiteResult>) -> Report {
+    // Score each site from the summed weights of its hits.
+    for r in &mut results {
+        let total: u32 = r.hits.iter().map(|h| h.weight).sum();
+        r.score = score::certainty(total);
+    }
+    // Most certain first; errored/zero-hit sites sink to the bottom.
+    results.sort_by(|a, b| b.score.cmp(&a.score));
+
     let sites_with_hits = results.iter().filter(|r| !r.hits.is_empty()).count();
     Report {
         generated_at: chrono::Local::now().to_rfc3339(),
@@ -40,15 +49,23 @@ pub fn render_text(report: &Report) -> String {
         report.total_candidates, report.sites_with_hits
     ));
 
-    out.push_str("--- Sites with hits ---\n");
+    out.push_str("--- Sites with hits (most certain first) ---\n");
     for r in report.results.iter().filter(|r| !r.hits.is_empty()) {
-        out.push_str(&format!("\n{}\n", r.url));
+        out.push_str(&format!(
+            "\n[{:>3}/100 {}] {}\n",
+            r.score,
+            score::band(r.score),
+            r.url
+        ));
         if let Some(s) = r.status {
             out.push_str(&format!("  status: {s}\n"));
         }
         for h in &r.hits {
             let cat = h.category.as_deref().unwrap_or("-");
-            out.push_str(&format!("  [{}] ({}, in:{})\n", h.keyword_id, cat, h.matched_in));
+            out.push_str(&format!(
+                "  [{}] ({}, in:{}, +{})\n",
+                h.keyword_id, cat, h.matched_in, h.weight
+            ));
             out.push_str(&format!("      …{}…\n", h.snippet));
         }
     }
@@ -92,8 +109,14 @@ pub fn render_text(report: &Report) -> String {
 
 /// Short summary for stdout.
 pub fn console_summary(report: &Report) -> String {
+    let top = report
+        .results
+        .iter()
+        .find(|r| !r.hits.is_empty())
+        .map(|r| format!(" Top: {}/100 ({}) {}", r.score, score::band(r.score), r.url))
+        .unwrap_or_default();
     format!(
-        "Checked {} candidate(s); {} had keyword hits.",
-        report.total_candidates, report.sites_with_hits
+        "Checked {} candidate(s); {} had keyword hits.{}",
+        report.total_candidates, report.sites_with_hits, top
     )
 }

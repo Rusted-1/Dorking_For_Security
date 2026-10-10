@@ -21,6 +21,36 @@
 
     { "id": "url-a-signup", "phrase": "a=signup", "category": "signup-url", "target": "url" },
     { "id": "url-user-register", "phrase": "/user/register", "category": "signup-url", "target": "url" },
-    { "id": "url-register", "phrase": "register", "category": "signup-url", "target": "url" }
+    { "id": "url-register", "phrase": "register", "category": "signup-url", "target": "url" },
+
+    { "id": "term-invest", "phrase": "invest", "category": "terminology", "whole_word": true },
+    { "id": "term-investment", "phrase": "investment", "category": "terminology", "whole_word": true },
+    { "id": "term-trade", "phrase": "trade", "category": "terminology", "whole_word": true },
+    { "id": "term-trading", "phrase": "trading", "category": "terminology", "whole_word": true },
+    { "id": "term-mining", "phrase": "mining", "category": "terminology", "whole_word": true },
+    { "id": "term-capital", "phrase": "capital", "category": "terminology", "whole_word": true },
+    { "id": "term-crypto", "phrase": "crypto", "category": "terminology", "whole_word": true },
+    { "id": "term-bitcoin", "phrase": "bitcoin", "category": "terminology", "whole_word": true },
+    { "id": "term-forex", "phrase": "forex", "category": "terminology", "whole_word": true },
+    { "id": "term-profit", "phrase": "profit", "category": "terminology", "whole_word": true },
+    { "id": "term-finance", "phrase": "finance", "category": "terminology", "whole_word": true },
+    { "id": "term-wealth", "phrase": "wealth", "category": "terminology", "whole_word": true },
+    { "id": "term-asset", "phrase": "asset", "category": "terminology", "whole_word": true },
+    { "id": "term-assets", "phrase": "assets", "category": "terminology", "whole_word": true },
+    { "id": "term-fund", "phrase": "fund", "category": "terminology", "whole_word": true },
+    { "id": "term-fx", "phrase": "fx", "category": "terminology", "whole_word": true },
+    { "id": "term-earn", "phrase": "earn", "category": "terminology", "whole_word": true },
+    { "id": "term-options", "phrase": "options", "category": "terminology", "whole_word": true },
+    { "id": "term-option", "phrase": "option", "category": "terminology", "whole_word": true },
+    { "id": "term-markets", "phrase": "markets", "category": "terminology", "whole_word": true },
+    { "id": "term-pips", "phrase": "pips", "category": "terminology", "whole_word": true },
+    { "id": "term-broker", "phrase": "broker", "category": "terminology", "whole_word": true },
+    { "id": "term-stocks", "phrase": "stocks", "category": "terminology", "whole_word": true },
+    { "id": "term-binary", "phrase": "binary", "category": "terminology", "whole_word": true },
+    { "id": "term-coin", "phrase": "coin", "category": "terminology", "whole_word": true },
+    { "id": "term-miners", "phrase": "miners", "category": "terminology", "whole_word": true },
+    { "id": "term-traders", "phrase": "traders", "category": "terminology", "whole_word": true },
+    { "id": "term-yield", "phrase": "yield", "category": "terminology", "whole_word": true },
+    { "id": "term-shares", "phrase": "shares", "category": "terminology", "whole_word": true }
   ]
 }

@@ -9,6 +9,7 @@ mod http;
 mod keywords;
 mod model;
 mod report;
+mod score;
 mod sources;
 mod verify;
 
@@ -118,12 +119,18 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
 
     println!("Checked: {label}");
     if hits.is_empty() {
-        println!("No keyword hits.");
+        println!("No keyword hits. Score: 0/100 (none)");
     } else {
+        let total: u32 = hits.iter().map(|h| h.weight).sum();
+        let s = score::certainty(total);
+        println!("Score: {}/100 ({})", s, score::band(s));
         println!("{} hit(s):", hits.len());
         for h in hits {
             let cat = h.category.as_deref().unwrap_or("-");
-            println!("  [{}] ({}, in:{})  …{}…", h.keyword_id, cat, h.matched_in, h.snippet);
+            println!(
+                "  [{}] ({}, in:{}, +{})  …{}…",
+                h.keyword_id, cat, h.matched_in, h.weight, h.snippet
+            );
         }
     }
     Ok(())
