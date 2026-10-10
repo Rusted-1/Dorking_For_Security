@@ -63,12 +63,13 @@ async fn run_scan(config_path: &Path) -> Result<()> {
     if matcher.is_empty() {
         anyhow::bail!("no keywords loaded from {}", cfg.keywords_file);
     }
-    let (content_kw, url_kw) = matcher.counts();
+    let (content_kw, url_kw, exclude_kw) = matcher.counts();
     println!(
-        "Loaded {} keyword(s): {} content, {} url.",
+        "Loaded {} keyword(s): {} content, {} url, {} exclusion.",
         matcher.len(),
         content_kw,
-        url_kw
+        url_kw,
+        exclude_kw
     );
 
     let client = http::build_client(&cfg.fetch)?;
@@ -116,8 +117,17 @@ async fn run_check(url: Option<String>, file: Option<PathBuf>, keywords_path: &P
 
     let text = verify::extract_text(&html);
     let hits = matcher.find(&url_for_match, &text);
+    let exclusions = matcher.exclusions(&url_for_match, &text);
 
     println!("Checked: {label}");
+    if !exclusions.is_empty() {
+        println!(
+            "EXCLUDED (treated as legitimate) — matched: {}",
+            exclusions.join(", ")
+        );
+        println!("Score: 0/100 (excluded)");
+        return Ok(());
+    }
     if hits.is_empty() {
         println!("No keyword hits. Score: 0/100 (none)");
     } else {

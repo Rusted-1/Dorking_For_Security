@@ -62,6 +62,11 @@ Each keyword is an object:
 - `regex` — treat `phrase` as a regular expression.
 - `target` — `"content"` (page text) or `"url"` (an `inurl:`-style filter).
 - `weight` — optional override of the category's default weight.
+- `exclude` — if true, a match disqualifies the page: it is treated as
+  legitimate, scored 0, and dropped from the ranked results (listed instead
+  under "Excluded" for auditing). Checked against both content and URL. Use
+  this for terms that signal a different, legitimate vertical (e.g. banking,
+  shipping/logistics).
 
 ## Scoring
 

@@ -43,6 +43,11 @@ pub struct Keyword {
     /// Override the category's default scoring weight.
     #[serde(default)]
     pub weight: Option<u32>,
+    /// If true, a match disqualifies the page: it is treated as legitimate,
+    /// scored 0, and dropped from the ranked results. Checked against both
+    /// page content and the URL.
+    #[serde(default)]
+    pub exclude: bool,
 }
 
 /// Top-level shape of the keywords data file (`keywords.json`).
@@ -70,6 +75,10 @@ pub struct SiteResult {
     pub error: Option<String>,
     /// Certainty that this is a scam-template page, 1-100 (0 = no hits).
     pub score: u32,
+    /// True if an exclusion term matched; the page is treated as legitimate.
+    pub excluded: bool,
+    /// Which exclusion terms matched (if any).
+    pub exclusions: Vec<String>,
     pub hits: Vec<KeywordHit>,
 }
 

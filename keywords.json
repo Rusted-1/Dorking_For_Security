@@ -51,6 +51,20 @@
     { "id": "term-miners", "phrase": "miners", "category": "terminology", "whole_word": true },
     { "id": "term-traders", "phrase": "traders", "category": "terminology", "whole_word": true },
     { "id": "term-yield", "phrase": "yield", "category": "terminology", "whole_word": true },
-    { "id": "term-shares", "phrase": "shares", "category": "terminology", "whole_word": true }
+    { "id": "term-shares", "phrase": "shares", "category": "terminology", "whole_word": true },
+
+    { "id": "ex-bank", "phrase": "bank", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-banking", "phrase": "banking", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-delivery", "phrase": "delivery", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-logistics", "phrase": "logistics", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-courier", "phrase": "courier", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-shipping", "phrase": "shipping", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-transportation", "phrase": "transportation", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-cargo", "phrase": "cargo", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-express", "phrase": "express", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-freight", "phrase": "freight", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-parcel", "phrase": "parcel", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-lottery", "phrase": "lottery", "category": "exclusion", "whole_word": true, "exclude": true },
+    { "id": "ex-sms", "phrase": "sms", "category": "exclusion", "whole_word": true, "exclude": true }
   ]
 }

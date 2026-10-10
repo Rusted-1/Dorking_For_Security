@@ -20,6 +20,18 @@ struct Compiled {
     re: Option<Regex>,
     lower_phrase: String,
     weight: u32,
+    is_exclude: bool,
+}
+
+impl Compiled {
+    /// Does this keyword appear in `haystack`? `lower_haystack` is the
+    /// lowercased form, used for the fast substring path.
+    fn matches(&self, haystack: &str, lower_haystack: &str) -> Option<usize> {
+        match &self.re {
+            Some(re) => re.find(haystack).map(|m| m.start()),
+            None => lower_haystack.find(&self.lower_phrase),
+        }
+    }
 }
 
 /// Matches content and URLs against a set of keywords.
@@ -49,11 +61,13 @@ impl Matcher {
             let weight = kw
                 .weight
                 .unwrap_or_else(|| score::default_weight(kw.category.as_deref()));
+            let is_exclude = kw.exclude;
             compiled.push(Compiled {
                 kw,
                 re,
                 lower_phrase,
                 weight,
+                is_exclude,
             });
         }
         Ok(Self { keywords: compiled })
@@ -67,14 +81,38 @@ impl Matcher {
         self.keywords.is_empty()
     }
 
-    /// How many keywords target the URL vs. page content.
-    pub fn counts(&self) -> (usize, usize) {
-        let url = self
-            .keywords
-            .iter()
-            .filter(|c| c.kw.target == Target::Url)
-            .count();
-        (self.keywords.len() - url, url)
+    /// Keyword counts: (content, url, exclusion).
+    pub fn counts(&self) -> (usize, usize, usize) {
+        let mut content = 0;
+        let mut url = 0;
+        let mut exclude = 0;
+        for c in &self.keywords {
+            if c.is_exclude {
+                exclude += 1;
+            } else if c.kw.target == Target::Url {
+                url += 1;
+            } else {
+                content += 1;
+            }
+        }
+        (content, url, exclude)
+    }
+
+    /// Return the exclusion terms that appear in the content or the URL.
+    /// A non-empty result means the page should be treated as legitimate.
+    pub fn exclusions(&self, url: &str, text: &str) -> Vec<String> {
+        let lower_text = text.to_lowercase();
+        let lower_url = url.to_lowercase();
+        let mut out = Vec::new();
+        for c in &self.keywords {
+            if !c.is_exclude {
+                continue;
+            }
+            if c.matches(text, &lower_text).is_some() || c.matches(url, &lower_url).is_some() {
+                out.push(c.kw.phrase.clone());
+            }
+        }
+        out
     }
 
     /// Find every keyword hit, checking content keywords against `text` and
@@ -84,15 +122,14 @@ impl Matcher {
         let lower_url = url.to_lowercase();
         let mut hits = Vec::new();
         for c in &self.keywords {
+            if c.is_exclude {
+                continue;
+            }
             let (haystack, lower_haystack) = match c.kw.target {
                 Target::Content => (text, &lower_text),
                 Target::Url => (url, &lower_url),
             };
-            let start = match &c.re {
-                Some(re) => re.find(haystack).map(|m| m.start()),
-                None => lower_haystack.find(&c.lower_phrase),
-            };
-            if let Some(start) = start {
+            if let Some(start) = c.matches(haystack, lower_haystack) {
                 hits.push(KeywordHit {
                     keyword_id: c.kw.id.clone(),
                     category: c.kw.category.clone(),
@@ -146,6 +183,7 @@ mod tests {
             whole_word: false,
             target,
             weight: None,
+            exclude: false,
         }
     }
 
@@ -158,6 +196,14 @@ mod tests {
             whole_word: true,
             target: Target::Content,
             weight: None,
+            exclude: false,
+        }
+    }
+
+    fn exclude_kw(id: &str, phrase: &str) -> Keyword {
+        Keyword {
+            exclude: true,
+            ..word_kw(id, phrase)
         }
     }
 
@@ -167,6 +213,23 @@ mod tests {
         // Must NOT match inside "bitcoin"; MUST match the standalone word.
         assert!(m.find("http://x/", "I love bitcoin trading").is_empty());
         assert_eq!(m.find("http://x/", "buy a coin today").len(), 1);
+    }
+
+    #[test]
+    fn exclusions_are_detected_and_not_scored() {
+        let m = Matcher::new(vec![
+            word_kw("crypto", "crypto"),
+            exclude_kw("bank", "bank"),
+        ])
+        .unwrap();
+        // The exclusion keyword must not appear as a scoring hit...
+        let hits = m.find("http://x/", "crypto services from your bank");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].keyword_id, "crypto");
+        // ...but must be reported by exclusions(), from content or URL.
+        assert_eq!(m.exclusions("http://x/", "crypto services from your bank"), vec!["bank"]);
+        assert_eq!(m.exclusions("http://bank.example/", "clean body"), vec!["bank"]);
+        assert!(m.exclusions("http://x/", "no legit terms here").is_empty());
     }
 
     #[test]

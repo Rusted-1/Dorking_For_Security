@@ -32,6 +32,8 @@ fn failure(url: &str, status: Option<u16>, error: String) -> SiteResult {
         status,
         error: Some(error),
         score: 0,
+        excluded: false,
+        exclusions: vec![],
         hits: vec![],
     }
 }
@@ -58,12 +60,15 @@ async fn verify_one(
                 Ok(body) => {
                     let text = extract_text(&body);
                     let hits = matcher.find(raw_url, &text);
+                    let exclusions = matcher.exclusions(raw_url, &text);
                     SiteResult {
                         url: raw_url.to_string(),
                         fetched: true,
                         status: Some(status),
                         error: None,
                         score: 0, // filled in by report::build_report
+                        excluded: !exclusions.is_empty(),
+                        exclusions,
                         hits,
                     }
                 }

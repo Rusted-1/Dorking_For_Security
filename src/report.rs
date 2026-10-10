@@ -7,15 +7,23 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub fn build_report(mut results: Vec<SiteResult>) -> Report {
-    // Score each site from the summed weights of its hits.
+    // Score each site from the summed weights of its hits. An excluded site
+    // (matched a legit-vertical term) is forced to 0.
     for r in &mut results {
-        let total: u32 = r.hits.iter().map(|h| h.weight).sum();
-        r.score = score::certainty(total);
+        r.score = if r.excluded {
+            0
+        } else {
+            let total: u32 = r.hits.iter().map(|h| h.weight).sum();
+            score::certainty(total)
+        };
     }
-    // Most certain first; errored/zero-hit sites sink to the bottom.
+    // Most certain first; excluded/errored/zero-hit sites sink to the bottom.
     results.sort_by(|a, b| b.score.cmp(&a.score));
 
-    let sites_with_hits = results.iter().filter(|r| !r.hits.is_empty()).count();
+    let sites_with_hits = results
+        .iter()
+        .filter(|r| !r.excluded && !r.hits.is_empty())
+        .count();
     Report {
         generated_at: chrono::Local::now().to_rfc3339(),
         total_candidates: results.len(),
@@ -50,7 +58,11 @@ pub fn render_text(report: &Report) -> String {
     ));
 
     out.push_str("--- Sites with hits (most certain first) ---\n");
-    for r in report.results.iter().filter(|r| !r.hits.is_empty()) {
+    for r in report
+        .results
+        .iter()
+        .filter(|r| !r.excluded && !r.hits.is_empty())
+    {
         out.push_str(&format!(
             "\n[{:>3}/100 {}] {}\n",
             r.score,
@@ -70,9 +82,22 @@ pub fn render_text(report: &Report) -> String {
         }
     }
 
-    // Index: keyword -> which sites matched it.
+    // Excluded sites (matched a legit-vertical term) — ignored, listed for audit.
+    let excluded: Vec<&SiteResult> = report.results.iter().filter(|r| r.excluded).collect();
+    if !excluded.is_empty() {
+        out.push_str("\n--- Excluded (treated as legitimate) ---\n");
+        for r in excluded {
+            out.push_str(&format!(
+                "  {}  (matched: {})\n",
+                r.url,
+                r.exclusions.join(", ")
+            ));
+        }
+    }
+
+    // Index: keyword -> which sites matched it (excluded sites omitted).
     let mut by_keyword: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for r in &report.results {
+    for r in report.results.iter().filter(|r| !r.excluded) {
         for h in &r.hits {
             by_keyword.entry(&h.keyword_id).or_default().push(&r.url);
         }
@@ -112,7 +137,7 @@ pub fn console_summary(report: &Report) -> String {
     let top = report
         .results
         .iter()
-        .find(|r| !r.hits.is_empty())
+        .find(|r| !r.excluded && !r.hits.is_empty())
         .map(|r| format!(" Top: {}/100 ({}) {}", r.score, score::band(r.score), r.url))
         .unwrap_or_default();
     format!(
