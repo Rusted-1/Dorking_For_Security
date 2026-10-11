@@ -63,6 +63,19 @@ pub fn ansi(score: u32) -> &'static str {
 
 pub const RESET: &str = "\x1b[0m";
 
+/// CSS class name for a score band, used by the HTML report.
+pub fn band_class(score: u32) -> &'static str {
+    match score {
+        0 => "band-none",
+        1..=25 => "band-vu",
+        26..=50 => "band-u",
+        51..=75 => "band-p",
+        76..=85 => "band-l",
+        86..=90 => "band-vl",
+        _ => "band-ac", // 91..=100
+    }
+}
+
 /// Format `score`/100 and its label, colored when `use_color` is true.
 pub fn tag(score: u32, use_color: bool) -> String {
     if use_color {

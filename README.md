@@ -22,7 +22,13 @@ cargo build --release
 cargo run --release -- scan --config config.toml
 ```
 
-Writes `out/report.json` and `out/report.txt` (sites ranked most-certain first).
+Writes three reports into `out/` (sites ranked most-certain first):
+
+- `report.html` — a self-contained page (open in a browser): colored score
+  badges matching the bands below, a filter box, expandable per-site hits, and
+  an "Excluded" section.
+- `report.json` — machine-readable.
+- `report.txt` — plain text (number + label).
 
 **Check** a single page or local file against the keyword list (handy for
 testing your list offline):

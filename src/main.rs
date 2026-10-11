@@ -5,6 +5,7 @@
 //! into a report.
 
 mod config;
+mod html;
 mod http;
 mod keywords;
 mod model;
@@ -109,8 +110,8 @@ async fn run_scan(config_path: &Path, color: bool) -> Result<()> {
     println!("{}", report::console_summary(&report));
     println!("{}", report::console_ranked(&report, color));
     println!(
-        "Report written to {}/report.json and {}/report.txt",
-        cfg.output_dir, cfg.output_dir
+        "Reports written to {d}/report.html, {d}/report.json and {d}/report.txt",
+        d = cfg.output_dir
     );
     Ok(())
 }

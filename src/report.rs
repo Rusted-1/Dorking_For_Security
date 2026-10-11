@@ -1,5 +1,6 @@
 //! Organize results into a report (JSON + readable text) and a console summary.
 
+use crate::html;
 use crate::model::{Report, SiteResult};
 use crate::score;
 use anyhow::{Context, Result};
@@ -43,6 +44,9 @@ pub fn write_report(report: &Report, output_dir: &Path) -> Result<()> {
 
     std::fs::write(output_dir.join("report.txt"), render_text(report))
         .context("writing report.txt")?;
+
+    std::fs::write(output_dir.join("report.html"), html::render_html(report))
+        .context("writing report.html")?;
 
     Ok(())
 }
