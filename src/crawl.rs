@@ -5,6 +5,7 @@
 //! settings as a normal scan (delay, timeout, robots.txt).
 
 use crate::config::FetchConfig;
+use crate::coord::Coordinator;
 use crate::http::robots_allows;
 use crate::keywords::Matcher;
 use crate::model::SiteResult;
@@ -40,6 +41,7 @@ pub async fn crawl(
     client: &reqwest::Client,
     cfg: &FetchConfig,
     max_pages: usize,
+    coord: Option<&Coordinator>,
 ) -> CrawlOutcome {
     let seed_url = match Url::parse(seed) {
         Ok(u) => u,
@@ -76,6 +78,19 @@ pub async fn crawl(
     while let Some((url, depth)) = queue.pop_front() {
         if results.len() >= max_pages {
             break;
+        }
+        // Halt immediately if a stop was requested.
+        if let Some(c) = coord {
+            if c.stop_requested() {
+                eprintln!("  stop requested — halting.");
+                break;
+            }
+        }
+        // Skip URLs another instance has already claimed.
+        if let Some(c) = coord {
+            if !c.claim(url.as_str()) {
+                continue;
+            }
         }
         if !results.is_empty() && cfg.delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;

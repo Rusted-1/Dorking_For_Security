@@ -54,6 +54,33 @@ cargo run --release -- check --file some_page.html
 cargo run --release -- check --url https://example.com/page
 ```
 
+## Running multiple instances + stopping
+
+Several `dorker` instances can run at once without scanning the same URL
+twice. They share a **coordination directory** and atomically claim each URL
+before scanning it; if one instance already claimed a URL, the others skip it.
+Coordination is on by default (a folder in the system temp dir). Point
+instances at a shared path to coordinate explicitly — including across
+machines if the path is on a shared filesystem:
+
+```
+dorker --coordinate /shared/dorker-run scan --url https://example.com/
+```
+
+Use `--solo` to run an instance with no coordination.
+
+**Stop command.** To halt every running instance immediately, from any
+terminal run:
+
+```
+dorker stop                                  # default coordination dir
+dorker --coordinate /shared/dorker-run stop  # a specific one
+```
+
+Each running scan checks for the stop signal before every page, halts at once,
+and still writes a report of the pages done so far. (Ctrl+C remains the
+instant local kill.) A new scan clears any leftover stop signal automatically.
+
 ## Configuration (`config.toml`)
 
 - `keywords_file` — path to the keyword data file.

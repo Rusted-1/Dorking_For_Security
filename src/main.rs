@@ -5,6 +5,7 @@
 //! into a report.
 
 mod config;
+mod coord;
 mod crawl;
 mod html;
 mod http;
@@ -25,8 +26,27 @@ struct Cli {
     /// When to colorize terminal output.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
     color: ColorWhen,
+    /// Shared coordination directory so multiple instances don't scan the same
+    /// URL twice (and so `stop` can reach them). Defaults to a folder in the
+    /// system temp dir; point several machines at a shared path to coordinate.
+    #[arg(long, global = true)]
+    coordinate: Option<PathBuf>,
+    /// Run without coordination (ignore other instances; `stop` won't reach it).
+    #[arg(long, global = true)]
+    solo: bool,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// Resolve the coordination directory, honoring --solo.
+fn coordinator(coordinate: &Option<PathBuf>, solo: bool) -> Option<coord::Coordinator> {
+    if solo {
+        return None;
+    }
+    let dir = coordinate
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("dorker-coord"));
+    coord::Coordinator::open(dir).ok()
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -70,6 +90,8 @@ enum Cmd {
         #[arg(long, default_value = "keywords.json")]
         keywords: PathBuf,
     },
+    /// Signal every running instance (sharing the coordination dir) to stop.
+    Stop,
 }
 
 #[tokio::main]
@@ -77,12 +99,25 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let color = use_color(cli.color);
     match cli.cmd {
-        Cmd::Scan { url, max, config } => run_scan(url, max, &config, color).await,
+        Cmd::Scan { url, max, config } => {
+            let coord = coordinator(&cli.coordinate, cli.solo);
+            run_scan(url, max, &config, color, coord.as_ref()).await
+        }
         Cmd::Check {
             url,
             file,
             keywords,
         } => run_check(url, file, &keywords, color).await,
+        Cmd::Stop => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            c.request_stop()?;
+            println!(
+                "Stop signal sent. Running instances using {} will halt before their next page.",
+                c.path().display()
+            );
+            Ok(())
+        }
     }
 }
 
@@ -91,7 +126,12 @@ async fn run_scan(
     max: usize,
     config_path: &Path,
     color: bool,
+    coord: Option<&coord::Coordinator>,
 ) -> Result<()> {
+    // Start fresh: clear any leftover stop sentinel from a previous run.
+    if let Some(c) = coord {
+        c.clear_stop();
+    }
     // A config is required for a source-based scan, but optional when --url is
     // given (crawl mode can run with built-in defaults).
     let cfg_opt = match config::load_config(config_path) {
@@ -138,7 +178,7 @@ async fn run_scan(
 
     let (results, link_writeup) = if let Some(seed) = &url {
         println!("Scanning {seed} and the links on it (safety cap {max} pages)…");
-        let outcome = crawl::crawl(seed, &matcher, &client, &fetch, max).await;
+        let outcome = crawl::crawl(seed, &matcher, &client, &fetch, max, coord).await;
         let links = (seed.clone(), outcome.internal, outcome.external);
         (outcome.results, Some(links))
     } else {
@@ -149,10 +189,12 @@ async fn run_scan(
         let candidates = sources::gather_candidates(&cfg.source, &client).await?;
         println!("Found {} candidate URL(s).", candidates.len());
         (
-            verify::verify_sites(&candidates, &matcher, &client, &fetch).await,
+            verify::verify_sites(&candidates, &matcher, &client, &fetch, coord).await,
             None,
         )
     };
+
+    let halted = coord.map(|c| c.stop_requested()).unwrap_or(false);
 
     let report = report::build_report(results);
     report::write_report(&report, &out_dir)?;
@@ -173,6 +215,9 @@ async fn run_scan(
             internal.len(),
             external.len()
         );
+    }
+    if halted {
+        println!("Halted early by a stop signal — the report covers pages scanned so far.");
     }
     Ok(())
 }

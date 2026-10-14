@@ -1,6 +1,7 @@
 //! Fetch candidate pages (politely) and check them for keyword hits.
 
 use crate::config::FetchConfig;
+use crate::coord::Coordinator;
 use crate::http::robots_allows;
 use crate::keywords::Matcher;
 use crate::model::SiteResult;
@@ -14,13 +15,25 @@ pub async fn verify_sites(
     matcher: &Matcher,
     client: &reqwest::Client,
     cfg: &FetchConfig,
+    coord: Option<&Coordinator>,
 ) -> Vec<SiteResult> {
     let mut results = Vec::with_capacity(urls.len());
-    for (i, raw_url) in urls.iter().enumerate() {
-        if i > 0 && cfg.delay_ms > 0 {
+    let mut scanned = 0usize;
+    for raw_url in urls {
+        if let Some(c) = coord {
+            if c.stop_requested() {
+                eprintln!("  stop requested — halting.");
+                break;
+            }
+            if !c.claim(raw_url) {
+                continue;
+            }
+        }
+        if scanned > 0 && cfg.delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;
         }
         results.push(verify_one(raw_url, matcher, client, cfg).await);
+        scanned += 1;
     }
     results
 }
