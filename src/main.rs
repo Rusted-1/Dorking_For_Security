@@ -5,6 +5,7 @@
 //! into a report.
 
 mod config;
+mod crawl;
 mod html;
 mod http;
 mod keywords;
@@ -48,8 +49,14 @@ fn use_color(when: ColorWhen) -> bool {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run a full scan from a config file.
+    /// Run a scan. Give --url to crawl one site, or use a config's source.
     Scan {
+        /// Start URL to crawl (follows same-site links automatically).
+        #[arg(long)]
+        url: Option<String>,
+        /// Maximum pages to fetch when crawling with --url.
+        #[arg(long, default_value_t = 20)]
+        max: usize,
         #[arg(long, default_value = "config.toml")]
         config: PathBuf,
     },
@@ -70,7 +77,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let color = use_color(cli.color);
     match cli.cmd {
-        Cmd::Scan { config } => run_scan(&config, color).await,
+        Cmd::Scan { url, max, config } => run_scan(url, max, &config, color).await,
         Cmd::Check {
             url,
             file,
@@ -79,12 +86,42 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_scan(config_path: &Path, color: bool) -> Result<()> {
-    let cfg = config::load_config(config_path)?;
-    let kws = keywords::load_keywords(Path::new(&cfg.keywords_file))?;
+async fn run_scan(
+    url: Option<String>,
+    max: usize,
+    config_path: &Path,
+    color: bool,
+) -> Result<()> {
+    // A config is required for a source-based scan, but optional when --url is
+    // given (crawl mode can run with built-in defaults).
+    let cfg_opt = match config::load_config(config_path) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            if url.is_some() {
+                None
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    let fetch = cfg_opt
+        .as_ref()
+        .map(|c| c.fetch.clone())
+        .unwrap_or_default();
+    let keywords_file = cfg_opt
+        .as_ref()
+        .map(|c| c.keywords_file.clone())
+        .unwrap_or_else(|| "keywords.json".to_string());
+    let output_dir = cfg_opt
+        .as_ref()
+        .map(|c| c.output_dir.clone())
+        .unwrap_or_else(|| "out".to_string());
+
+    let kws = keywords::load_keywords(Path::new(&keywords_file))?;
     let matcher = keywords::Matcher::new(kws)?;
     if matcher.is_empty() {
-        anyhow::bail!("no keywords loaded from {}", cfg.keywords_file);
+        anyhow::bail!("no keywords loaded from {}", keywords_file);
     }
     let (content_kw, url_kw, exclude_kw) = matcher.counts();
     println!(
@@ -95,23 +132,31 @@ async fn run_scan(config_path: &Path, color: bool) -> Result<()> {
         exclude_kw
     );
 
-    let client = http::build_client(&cfg.fetch)?;
+    let client = http::build_client(&fetch)?;
 
-    println!("Gathering candidates…");
-    let candidates = sources::gather_candidates(&cfg.source, &client).await?;
-    println!("Found {} candidate URL(s).", candidates.len());
+    let results = if let Some(seed) = &url {
+        println!("Crawling {seed} (up to {max} page(s))…");
+        crawl::crawl(seed, &matcher, &client, &fetch, max).await
+    } else {
+        let cfg = cfg_opt
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no config file found and no --url given"))?;
+        println!("Gathering candidates…");
+        let candidates = sources::gather_candidates(&cfg.source, &client).await?;
+        println!("Found {} candidate URL(s).", candidates.len());
+        verify::verify_sites(&candidates, &matcher, &client, &fetch).await
+    };
 
-    let results = verify::verify_sites(&candidates, &matcher, &client, &cfg.fetch).await;
     let report = report::build_report(results);
 
-    let out_dir = PathBuf::from(&cfg.output_dir);
+    let out_dir = PathBuf::from(&output_dir);
     report::write_report(&report, &out_dir)?;
 
     println!("{}", report::console_summary(&report));
     println!("{}", report::console_ranked(&report, color));
     println!(
         "Reports written to {d}/report.html, {d}/report.json and {d}/report.txt",
-        d = cfg.output_dir
+        d = output_dir
     );
     Ok(())
 }

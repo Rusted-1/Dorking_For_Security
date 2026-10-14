@@ -18,7 +18,7 @@ fn default_output_dir() -> String {
     "out".to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FetchConfig {
     /// Delay between requests, in milliseconds (politeness / rate limiting).
     #[serde(default = "d_delay")]
