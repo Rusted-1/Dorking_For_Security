@@ -49,14 +49,16 @@ pub async fn crawl(
     };
     let seed_host = norm_host(&seed_url);
 
-    let mut queue: VecDeque<Url> = VecDeque::new();
+    // Depth 0 = the start page; depth 1 = links found on the start page.
+    // We never go deeper than depth 1.
+    let mut queue: VecDeque<(Url, usize)> = VecDeque::new();
     let mut seen: HashSet<String> = HashSet::new();
     seen.insert(key(&seed_url));
-    queue.push_back(seed_url);
+    queue.push_back((seed_url, 0));
 
     let mut results: Vec<SiteResult> = Vec::new();
 
-    while let Some(url) = queue.pop_front() {
+    while let Some((url, depth)) = queue.pop_front() {
         if results.len() >= max_pages {
             break;
         }
@@ -98,11 +100,12 @@ pub async fn crawl(
                             hits,
                         });
 
-                        // Queue same-site links we haven't seen yet.
-                        if results.len() + queue.len() < max_pages.saturating_mul(5) {
+                        // Only follow links found on the start page (depth 0).
+                        // Links on those linked pages are not followed.
+                        if depth == 0 {
                             for link in extract_links(&body, &url) {
                                 if norm_host(&link) == seed_host && seen.insert(key(&link)) {
-                                    queue.push_back(link);
+                                    queue.push_back((link, 1));
                                 }
                             }
                         }

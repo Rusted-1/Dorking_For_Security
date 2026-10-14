@@ -16,16 +16,17 @@ cargo build --release
 
 ## Usage
 
-**Crawl** one site — give a start URL and it follows the site's own links
-automatically, scoring each page (no candidate list needed):
+**Crawl** one site — give a start URL and it scans that page plus every
+same-site link found on it (no candidate list needed):
 
 ```
-cargo run --release -- scan --url https://example.com/ --max 20
+cargo run --release -- scan --url https://example.com/
 ```
 
-`--max` caps how many pages it fetches (default 20). Crawling stays on the
-start URL's host (a leading `www.` is ignored) and works with built-in
-defaults, so no config file is required for this mode.
+It scores the start page and each link on it, then stops (it does not follow
+links deeper than that). Links are followed only on the start URL's own host
+(a leading `www.` is ignored). `--max` is a safety cap on total pages fetched
+(default 100). No config file is required for this mode.
 
 **Scan** a batch of candidates from a config file:
 

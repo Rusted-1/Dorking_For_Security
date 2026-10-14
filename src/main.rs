@@ -51,11 +51,11 @@ fn use_color(when: ColorWhen) -> bool {
 enum Cmd {
     /// Run a scan. Give --url to crawl one site, or use a config's source.
     Scan {
-        /// Start URL to crawl (follows same-site links automatically).
+        /// Start URL: scans this page and every same-site link on it.
         #[arg(long)]
         url: Option<String>,
-        /// Maximum pages to fetch when crawling with --url.
-        #[arg(long, default_value_t = 20)]
+        /// Safety cap on total pages fetched (start page + its links).
+        #[arg(long, default_value_t = 100)]
         max: usize,
         #[arg(long, default_value = "config.toml")]
         config: PathBuf,
@@ -135,7 +135,7 @@ async fn run_scan(
     let client = http::build_client(&fetch)?;
 
     let results = if let Some(seed) = &url {
-        println!("Crawling {seed} (up to {max} page(s))…");
+        println!("Scanning {seed} and the links on it (safety cap {max} pages)…");
         crawl::crawl(seed, &matcher, &client, &fetch, max).await
     } else {
         let cfg = cfg_opt
