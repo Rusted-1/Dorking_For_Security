@@ -33,6 +33,8 @@ pub struct CrawlOutcome {
     pub internal: Vec<String>,
     /// Off-site links discovered (deduplicated, sorted).
     pub external: Vec<String>,
+    /// Set when the crawl did nothing because another instance owns the site.
+    pub skipped_site: Option<String>,
 }
 
 pub async fn crawl(
@@ -59,10 +61,23 @@ pub async fn crawl(
                 }],
                 internal: vec![],
                 external: vec![],
+                skipped_site: None,
             }
         }
     };
     let seed_host = norm_host(&seed_url);
+
+    // Claim the whole site. If another instance already has it, do nothing.
+    if let (Some(c), Some(host)) = (coord, &seed_host) {
+        if !c.claim_site(host) {
+            return CrawlOutcome {
+                results: vec![],
+                internal: vec![],
+                external: vec![],
+                skipped_site: Some(host.clone()),
+            };
+        }
+    }
 
     // Depth 0 = the start page; depth 1 = links found on the start page.
     // We never go deeper than depth 1.
@@ -88,7 +103,7 @@ pub async fn crawl(
         }
         // Skip URLs another instance has already claimed.
         if let Some(c) = coord {
-            if !c.claim(url.as_str()) {
+            if !c.claim_url(url.as_str()) {
                 continue;
             }
         }
@@ -178,6 +193,7 @@ pub async fn crawl(
         results,
         internal,
         external,
+        skipped_site: None,
     }
 }
 

@@ -1,11 +1,12 @@
 //! Fetch candidate pages (politely) and check them for keyword hits.
 
 use crate::config::FetchConfig;
-use crate::coord::Coordinator;
+use crate::coord::{self, Coordinator};
 use crate::http::robots_allows;
 use crate::keywords::Matcher;
 use crate::model::SiteResult;
 use scraper::Html;
+use std::collections::HashSet;
 use std::time::Duration;
 use url::Url;
 
@@ -19,13 +20,26 @@ pub async fn verify_sites(
 ) -> Vec<SiteResult> {
     let mut results = Vec::with_capacity(urls.len());
     let mut scanned = 0usize;
+    // Hosts this instance owns, so later URLs on the same site aren't skipped.
+    let mut owned_hosts: HashSet<String> = HashSet::new();
     for raw_url in urls {
         if let Some(c) = coord {
             if c.stop_requested() {
                 eprintln!("  stop requested — halting.");
                 break;
             }
-            if !c.claim(raw_url) {
+            // Site-level claim: stay off sites another instance owns.
+            if let Some(host) = coord::host_key(raw_url) {
+                if !owned_hosts.contains(&host) {
+                    if c.claim_site(&host) {
+                        owned_hosts.insert(host);
+                    } else {
+                        eprintln!("  skip — site '{host}' is handled by another instance");
+                        continue;
+                    }
+                }
+            }
+            if !c.claim_url(raw_url) {
                 continue;
             }
         }

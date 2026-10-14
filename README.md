@@ -56,18 +56,31 @@ cargo run --release -- check --url https://example.com/page
 
 ## Running multiple instances + stopping
 
-Several `dorker` instances can run at once without scanning the same URL
-twice. They share a **coordination directory** and atomically claim each URL
-before scanning it; if one instance already claimed a URL, the others skip it.
+Several `dorker` instances can run at once without ever touching the same
+site. They share a **coordination directory**; each instance claims a whole
+**site** (its host) before scanning it, and any other instance that sees the
+site claimed stays off it entirely (per-URL claims add a second guard).
 Coordination is on by default (a folder in the system temp dir). Point
 instances at a shared path to coordinate explicitly — including across
 machines if the path is on a shared filesystem:
 
 ```
-dorker --coordinate /shared/dorker-run scan --url https://example.com/
+dorker --coordinate /shared/dorker-run scan --url https://site-a.com/
+dorker --coordinate /shared/dorker-run scan --url https://site-b.com/
 ```
 
-Use `--solo` to run an instance with no coordination.
+An instance pointed at a site another instance already owns prints a notice
+and exits without scanning. Use `--solo` to run with no coordination.
+
+See and reset what's claimed:
+
+```
+dorker --coordinate /shared/dorker-run sites   # list claimed sites
+dorker --coordinate /shared/dorker-run reset    # clear all claims + stop
+```
+
+Claims self-heal after 6 hours (so a crashed instance never blocks a site
+forever); `reset` clears them immediately for a fresh run.
 
 **Stop command.** To halt every running instance immediately, from any
 terminal run:

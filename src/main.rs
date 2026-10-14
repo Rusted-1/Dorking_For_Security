@@ -92,6 +92,10 @@ enum Cmd {
     },
     /// Signal every running instance (sharing the coordination dir) to stop.
     Stop,
+    /// List the sites currently claimed by instances (shared coordination dir).
+    Sites,
+    /// Clear coordination state: all site/URL claims and any stop signal.
+    Reset,
 }
 
 #[tokio::main]
@@ -116,6 +120,27 @@ async fn main() -> Result<()> {
                 "Stop signal sent. Running instances using {} will halt before their next page.",
                 c.path().display()
             );
+            Ok(())
+        }
+        Cmd::Sites => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            let sites = c.list_sites();
+            if sites.is_empty() {
+                println!("No sites currently claimed ({}).", c.path().display());
+            } else {
+                println!("Claimed sites ({}):", sites.len());
+                for s in sites {
+                    println!("  {s}");
+                }
+            }
+            Ok(())
+        }
+        Cmd::Reset => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            c.reset()?;
+            println!("Coordination state cleared in {}.", c.path().display());
             Ok(())
         }
     }
@@ -176,11 +201,17 @@ async fn run_scan(
 
     let out_dir = PathBuf::from(&output_dir);
 
-    let (results, link_writeup) = if let Some(seed) = &url {
+    let results;
+    let mut link_writeup = None;
+    if let Some(seed) = &url {
         println!("Scanning {seed} and the links on it (safety cap {max} pages)…");
         let outcome = crawl::crawl(seed, &matcher, &client, &fetch, max, coord).await;
-        let links = (seed.clone(), outcome.internal, outcome.external);
-        (outcome.results, Some(links))
+        if let Some(host) = &outcome.skipped_site {
+            println!("Site '{host}' is already being handled by another instance — skipping.");
+            return Ok(());
+        }
+        link_writeup = Some((seed.clone(), outcome.internal, outcome.external));
+        results = outcome.results;
     } else {
         let cfg = cfg_opt
             .as_ref()
@@ -188,11 +219,8 @@ async fn run_scan(
         println!("Gathering candidates…");
         let candidates = sources::gather_candidates(&cfg.source, &client).await?;
         println!("Found {} candidate URL(s).", candidates.len());
-        (
-            verify::verify_sites(&candidates, &matcher, &client, &fetch, coord).await,
-            None,
-        )
-    };
+        results = verify::verify_sites(&candidates, &matcher, &client, &fetch, coord).await;
+    }
 
     let halted = coord.map(|c| c.stop_requested()).unwrap_or(false);
 
