@@ -25,26 +25,39 @@ fn key(u: &Url) -> String {
     u.to_string()
 }
 
+/// The results of a crawl, plus an inventory of every link seen.
+pub struct CrawlOutcome {
+    pub results: Vec<SiteResult>,
+    /// Same-site links discovered (deduplicated, sorted).
+    pub internal: Vec<String>,
+    /// Off-site links discovered (deduplicated, sorted).
+    pub external: Vec<String>,
+}
+
 pub async fn crawl(
     seed: &str,
     matcher: &Matcher,
     client: &reqwest::Client,
     cfg: &FetchConfig,
     max_pages: usize,
-) -> Vec<SiteResult> {
+) -> CrawlOutcome {
     let seed_url = match Url::parse(seed) {
         Ok(u) => u,
         Err(e) => {
-            return vec![SiteResult {
-                url: seed.to_string(),
-                fetched: false,
-                status: None,
-                error: Some(format!("invalid start url: {e}")),
-                score: 0,
-                excluded: false,
-                exclusions: vec![],
-                hits: vec![],
-            }]
+            return CrawlOutcome {
+                results: vec![SiteResult {
+                    url: seed.to_string(),
+                    fetched: false,
+                    status: None,
+                    error: Some(format!("invalid start url: {e}")),
+                    score: 0,
+                    excluded: false,
+                    exclusions: vec![],
+                    hits: vec![],
+                }],
+                internal: vec![],
+                external: vec![],
+            }
         }
     };
     let seed_host = norm_host(&seed_url);
@@ -57,6 +70,8 @@ pub async fn crawl(
     queue.push_back((seed_url, 0));
 
     let mut results: Vec<SiteResult> = Vec::new();
+    let mut internal: HashSet<String> = HashSet::new();
+    let mut external: HashSet<String> = HashSet::new();
 
     while let Some((url, depth)) = queue.pop_front() {
         if results.len() >= max_pages {
@@ -100,13 +115,17 @@ pub async fn crawl(
                             hits,
                         });
 
-                        // Only follow links found on the start page (depth 0).
-                        // Links on those linked pages are not followed.
-                        if depth == 0 {
-                            for link in extract_links(&body, &url) {
-                                if norm_host(&link) == seed_host && seen.insert(key(&link)) {
-                                    queue.push_back((link, 1));
-                                }
+                        // Inventory every link on this page, and (only from
+                        // the start page) queue same-site links to scan next.
+                        for link in extract_links(&body, &url) {
+                            let is_internal = norm_host(&link) == seed_host;
+                            if is_internal {
+                                internal.insert(key(&link));
+                            } else {
+                                external.insert(key(&link));
+                            }
+                            if depth == 0 && is_internal && seen.insert(key(&link)) {
+                                queue.push_back((link, 1));
                             }
                         }
                     }
@@ -135,7 +154,16 @@ pub async fn crawl(
         }
     }
 
-    results
+    let mut internal: Vec<String> = internal.into_iter().collect();
+    let mut external: Vec<String> = external.into_iter().collect();
+    internal.sort();
+    external.sort();
+
+    CrawlOutcome {
+        results,
+        internal,
+        external,
+    }
 }
 
 /// Pull absolute http(s) links from a page, resolved against its URL.

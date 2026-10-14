@@ -28,6 +28,10 @@ links deeper than that). Links are followed only on the start URL's own host
 (a leading `www.` is ignored). `--max` is a safety cap on total pages fetched
 (default 100). No config file is required for this mode.
 
+Crawl mode also writes `out/links.md` — an inventory of every link found
+(internal pages, plus external links grouped by domain) for planning future
+dorks.
+
 **Scan** a batch of candidates from a config file:
 
 ```

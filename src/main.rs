@@ -134,9 +134,13 @@ async fn run_scan(
 
     let client = http::build_client(&fetch)?;
 
-    let results = if let Some(seed) = &url {
+    let out_dir = PathBuf::from(&output_dir);
+
+    let (results, link_writeup) = if let Some(seed) = &url {
         println!("Scanning {seed} and the links on it (safety cap {max} pages)…");
-        crawl::crawl(seed, &matcher, &client, &fetch, max).await
+        let outcome = crawl::crawl(seed, &matcher, &client, &fetch, max).await;
+        let links = (seed.clone(), outcome.internal, outcome.external);
+        (outcome.results, Some(links))
     } else {
         let cfg = cfg_opt
             .as_ref()
@@ -144,13 +148,18 @@ async fn run_scan(
         println!("Gathering candidates…");
         let candidates = sources::gather_candidates(&cfg.source, &client).await?;
         println!("Found {} candidate URL(s).", candidates.len());
-        verify::verify_sites(&candidates, &matcher, &client, &fetch).await
+        (
+            verify::verify_sites(&candidates, &matcher, &client, &fetch).await,
+            None,
+        )
     };
 
     let report = report::build_report(results);
-
-    let out_dir = PathBuf::from(&output_dir);
     report::write_report(&report, &out_dir)?;
+
+    if let Some((seed, internal, external)) = &link_writeup {
+        report::write_links(seed, internal, external, &out_dir)?;
+    }
 
     println!("{}", report::console_summary(&report));
     println!("{}", report::console_ranked(&report, color));
@@ -158,6 +167,13 @@ async fn run_scan(
         "Reports written to {d}/report.html, {d}/report.json and {d}/report.txt",
         d = output_dir
     );
+    if let Some((_, internal, external)) = &link_writeup {
+        println!(
+            "Link write-up: {output_dir}/links.md ({} internal, {} external)",
+            internal.len(),
+            external.len()
+        );
+    }
     Ok(())
 }
 

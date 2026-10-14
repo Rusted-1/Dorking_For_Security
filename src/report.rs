@@ -6,6 +6,7 @@ use crate::score;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
+use url::Url;
 
 pub fn build_report(mut results: Vec<SiteResult>) -> Report {
     // Score each site from the summed weights of its hits. An excluded site
@@ -130,6 +131,69 @@ pub fn render_text(report: &Report) -> String {
                 r.url,
                 r.error.as_deref().unwrap_or("unknown")
             ));
+        }
+    }
+
+    out
+}
+
+/// Write a link inventory (`links.md`) for future dorking.
+pub fn write_links(
+    seed: &str,
+    internal: &[String],
+    external: &[String],
+    out_dir: &Path,
+) -> Result<()> {
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("creating output dir {}", out_dir.display()))?;
+    std::fs::write(out_dir.join("links.md"), render_links(seed, internal, external))
+        .context("writing links.md")?;
+    Ok(())
+}
+
+/// Markdown write-up of discovered links: internal pages, then external links
+/// grouped by domain (handy for planning future dorks).
+pub fn render_links(seed: &str, internal: &[String], external: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# Links found on {seed}\n\n"));
+    out.push_str(&format!("generated: {}\n\n", chrono::Local::now().to_rfc3339()));
+    out.push_str(&format!(
+        "{} internal page(s), {} external link(s).\n",
+        internal.len(),
+        external.len()
+    ));
+
+    out.push_str(&format!("\n## Internal pages ({})\n", internal.len()));
+    if internal.is_empty() {
+        out.push_str("_none found_\n");
+    } else {
+        for u in internal {
+            out.push_str(&format!("- {u}\n"));
+        }
+    }
+
+    // Group external links by domain.
+    let mut by_domain: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+    for u in external {
+        let host = Url::parse(u)
+            .ok()
+            .and_then(|p| p.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "(unknown)".to_string());
+        by_domain.entry(host).or_default().push(u);
+    }
+    out.push_str(&format!(
+        "\n## External links ({} across {} domain(s))\n",
+        external.len(),
+        by_domain.len()
+    ));
+    if by_domain.is_empty() {
+        out.push_str("_none found_\n");
+    } else {
+        for (host, urls) in by_domain {
+            out.push_str(&format!("\n### {host}\n"));
+            for u in urls {
+                out.push_str(&format!("- {u}\n"));
+            }
         }
     }
 
