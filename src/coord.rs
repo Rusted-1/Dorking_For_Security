@@ -28,10 +28,10 @@ pub struct Coordinator {
 impl Coordinator {
     /// Open (creating if needed) a coordination directory.
     pub fn open(dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(dir.join("claims"))
-            .with_context(|| format!("creating coordination dir {}", dir.display()))?;
-        fs::create_dir_all(dir.join("sites"))
-            .with_context(|| format!("creating coordination dir {}", dir.display()))?;
+        for sub in ["claims", "sites", "queue", "queue_proc"] {
+            fs::create_dir_all(dir.join(sub))
+                .with_context(|| format!("creating coordination dir {}", dir.display()))?;
+        }
         Ok(Self { dir })
     }
 
@@ -107,22 +107,113 @@ impl Coordinator {
         let _ = fs::remove_file(self.stop_path());
     }
 
-    /// Clear all coordination state: site claims, URL claims, and any stop.
+    /// Clear all coordination state: site claims, URL claims, queue, and stop.
     pub fn reset(&self) -> Result<()> {
-        let _ = fs::remove_dir_all(self.dir.join("sites"));
-        let _ = fs::remove_dir_all(self.dir.join("claims"));
+        for sub in ["sites", "claims", "queue", "queue_proc"] {
+            let _ = fs::remove_dir_all(self.dir.join(sub));
+            fs::create_dir_all(self.dir.join(sub))?;
+        }
         self.clear_stop();
-        fs::create_dir_all(self.dir.join("claims"))?;
-        fs::create_dir_all(self.dir.join("sites"))?;
         Ok(())
+    }
+
+    // ---- Work queue ---------------------------------------------------------
+
+    /// Add a URL to the shared work queue. Returns false if it's already queued.
+    pub fn enqueue(&self, url: &str) -> bool {
+        self.claim_in("queue", url, url)
+    }
+
+    /// Pending queue items (URLs), sorted.
+    pub fn queue_list(&self) -> Vec<String> {
+        read_url_files(&self.dir.join("queue"))
+    }
+
+    /// (pending, in-progress) counts.
+    pub fn queue_counts(&self) -> (usize, usize) {
+        let pending = count_dir(&self.dir.join("queue"));
+        let processing = count_dir(&self.dir.join("queue_proc"));
+        (pending, processing)
+    }
+
+    /// Atomically take the next queue item, moving it to in-progress. Returns
+    /// the URL, or None when the queue is empty. Safe for many workers: the
+    /// rename succeeds for exactly one of them.
+    pub fn take_next(&self) -> Option<String> {
+        self.reclaim_stale();
+        let qdir = self.dir.join("queue");
+        let pdir = self.dir.join("queue_proc");
+        let mut names: Vec<_> = fs::read_dir(&qdir)
+            .ok()?
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        names.sort();
+        for name in names {
+            let from = qdir.join(&name);
+            let to = pdir.join(&name);
+            if fs::rename(&from, &to).is_ok() {
+                if let Ok(c) = fs::read_to_string(&to) {
+                    return Some(c.lines().next().unwrap_or("").trim().to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Mark a taken item finished (remove its in-progress marker).
+    pub fn complete(&self, url: &str) {
+        let _ = fs::remove_file(self.dir.join("queue_proc").join(hash_name(url)));
+    }
+
+    /// Move in-progress items older than the TTL back to the queue (a worker
+    /// that crashed mid-item shouldn't strand the site).
+    fn reclaim_stale(&self) {
+        let pdir = self.dir.join("queue_proc");
+        let qdir = self.dir.join("queue");
+        if let Ok(entries) = fs::read_dir(&pdir) {
+            for e in entries.flatten() {
+                if let Ok(meta) = e.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified.elapsed().map(|d| d > CLAIM_TTL).unwrap_or(false) {
+                            let _ = fs::rename(e.path(), qdir.join(e.file_name()));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
-/// Normalized host of a URL (lowercased, leading `www.` stripped).
+fn read_url_files(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if let Ok(c) = fs::read_to_string(e.path()) {
+                if let Some(line) = c.lines().next() {
+                    out.push(line.trim().to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn count_dir(dir: &Path) -> usize {
+    fs::read_dir(dir).map(|e| e.flatten().count()).unwrap_or(0)
+}
+
+/// Normalized site identity of a URL: lowercased host (leading `www.`
+/// stripped), with the port appended when the URL specifies one. Two services
+/// on the same host but different ports are distinct sites.
 pub fn host_key(url: &str) -> Option<String> {
-    Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(|h| h.trim_start_matches("www.").to_lowercase()))
+    let u = Url::parse(url).ok()?;
+    let host = u.host_str()?.trim_start_matches("www.").to_lowercase();
+    match u.port() {
+        Some(p) => Some(format!("{host}:{p}")),
+        None => Some(host),
+    }
 }
 
 /// Stable 64-bit FNV-1a hash as a hex filename (deterministic across processes

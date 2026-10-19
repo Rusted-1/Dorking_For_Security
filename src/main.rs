@@ -105,6 +105,30 @@ enum Cmd {
         /// After discovering, scan the found sites straight through.
         #[arg(long)]
         scan: bool,
+        /// Add the discovered sites to the shared work queue instead.
+        #[arg(long)]
+        enqueue: bool,
+    },
+    /// Add one or more URLs to the shared work queue.
+    Enqueue {
+        /// URLs to queue (each needs https://).
+        urls: Vec<String>,
+        /// Also read URLs from a file, one per line.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Show the shared work queue (pending + in-progress).
+    Queue,
+    /// Worker: pull sites from the queue and scan them until it's empty.
+    Work {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        /// Safety cap on pages per site.
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+        /// Keep running and poll for new queue items instead of exiting.
+        #[arg(long)]
+        watch: bool,
     },
 }
 
@@ -153,9 +177,52 @@ async fn main() -> Result<()> {
             println!("Coordination state cleared in {}.", c.path().display());
             Ok(())
         }
-        Cmd::Discover { config, scan } => {
+        Cmd::Discover { config, scan, enqueue } => {
             let coord = coordinator(&cli.coordinate, cli.solo);
-            run_discover(&config, scan, color, coord.as_ref()).await
+            run_discover(&config, scan, enqueue, color, coord.as_ref()).await
+        }
+        Cmd::Enqueue { urls, file } => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            let mut all = urls;
+            if let Some(f) = file {
+                let raw = std::fs::read_to_string(&f)
+                    .with_context(|| format!("reading {}", f.display()))?;
+                all.extend(
+                    raw.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .map(String::from),
+                );
+            }
+            if all.is_empty() {
+                anyhow::bail!("nothing to enqueue — pass URLs or --file");
+            }
+            let (mut added, mut dup) = (0usize, 0usize);
+            for u in &all {
+                if c.enqueue(u) {
+                    added += 1;
+                } else {
+                    dup += 1;
+                }
+            }
+            println!("Queued {added} URL(s) ({dup} already present) in {}.", c.path().display());
+            Ok(())
+        }
+        Cmd::Queue => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            let (pending, processing) = c.queue_counts();
+            println!("Queue: {pending} pending, {processing} in progress ({}).", c.path().display());
+            for u in c.queue_list() {
+                println!("  {u}");
+            }
+            Ok(())
+        }
+        Cmd::Work { config, max, watch } => {
+            let coord = coordinator(&cli.coordinate, cli.solo)
+                .ok_or_else(|| anyhow::anyhow!("worker needs a coordination directory (don't use --solo)"))?;
+            run_work(&config, max, watch, &coord).await
         }
     }
 }
@@ -267,6 +334,7 @@ async fn run_scan(
 async fn run_discover(
     config_path: &Path,
     scan: bool,
+    enqueue: bool,
     color: bool,
     coord: Option<&coord::Coordinator>,
 ) -> Result<()> {
@@ -306,6 +374,21 @@ async fn run_discover(
         list_path.display()
     );
 
+    if enqueue {
+        let c = coord
+            .ok_or_else(|| anyhow::anyhow!("--enqueue needs a coordination directory (don't use --solo)"))?;
+        let (mut added, mut dup) = (0usize, 0usize);
+        for u in &candidates {
+            if c.enqueue(u) {
+                added += 1;
+            } else {
+                dup += 1;
+            }
+        }
+        println!("Added {added} to the work queue ({dup} already present). Run `dorker work` to process them.");
+        return Ok(());
+    }
+
     if !scan {
         println!("Run `dorker scan` on these (or re-run with --scan) to score them.");
         return Ok(());
@@ -333,6 +416,89 @@ async fn run_discover(
     if halted {
         println!("Halted early by a stop signal — the report covers pages scanned so far.");
     }
+    Ok(())
+}
+
+/// Filesystem-safe folder name for a host (for per-site report dirs).
+fn safe_host(url: &str) -> String {
+    let host = coord::host_key(url).unwrap_or_else(|| "site".to_string());
+    host.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect()
+}
+
+async fn run_work(
+    config_path: &Path,
+    max: usize,
+    watch: bool,
+    coord: &coord::Coordinator,
+) -> Result<()> {
+    coord.clear_stop();
+
+    // Config is optional; fall back to built-in defaults like crawl mode.
+    let cfg_opt = config::load_config(config_path).ok();
+    let fetch = cfg_opt.as_ref().map(|c| c.fetch.clone()).unwrap_or_default();
+    let keywords_file = cfg_opt
+        .as_ref()
+        .map(|c| c.keywords_file.clone())
+        .unwrap_or_else(|| "keywords.json".to_string());
+    let output_dir = cfg_opt
+        .as_ref()
+        .map(|c| c.output_dir.clone())
+        .unwrap_or_else(|| "out".to_string());
+
+    let kws = keywords::load_keywords(Path::new(&keywords_file))?;
+    let matcher = keywords::Matcher::new(kws)?;
+    if matcher.is_empty() {
+        anyhow::bail!("no keywords loaded from {}", keywords_file);
+    }
+    let client = http::build_client(&fetch)?;
+
+    let (pending, processing) = coord.queue_counts();
+    println!(
+        "Worker started. Queue: {pending} pending, {processing} in progress. Reports → {output_dir}/sites/<host>/"
+    );
+
+    let mut done = 0usize;
+    loop {
+        if coord.stop_requested() {
+            println!("Stop requested — worker halting.");
+            break;
+        }
+        let url = match coord.take_next() {
+            Some(u) => u,
+            None => {
+                if watch {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        };
+
+        println!("→ taking {url}");
+        let outcome = crawl::crawl(&url, &matcher, &client, &fetch, max, Some(coord)).await;
+        if let Some(host) = &outcome.skipped_site {
+            println!("  (site '{host}' already handled by another instance; skipping)");
+            coord.complete(&url);
+            continue;
+        }
+
+        let site_dir = PathBuf::from(&output_dir).join("sites").join(safe_host(&url));
+        let report = report::build_report(outcome.results);
+        report::write_report(&report, &site_dir)?;
+        report::write_links(&url, &outcome.internal, &outcome.external, &site_dir)?;
+        println!(
+            "  {} → {}",
+            report::console_summary(&report),
+            site_dir.display()
+        );
+        coord.complete(&url);
+        done += 1;
+    }
+
+    println!("Worker finished — processed {done} site(s).");
     Ok(())
 }
 

@@ -97,6 +97,25 @@ dorker --coordinate /shared/dorker-run reset    # clear all claims + stop
 Claims self-heal after 6 hours (so a crashed instance never blocks a site
 forever); `reset` clears them immediately for a fresh run.
 
+**Work queue (self-serve workers).** Instead of launching one instance per
+site, drop sites into a shared queue and run workers that pull from it on
+their own. The queue lives in the coordination directory, so all the
+site-claim and stop guarantees above apply.
+
+```
+dorker --coordinate /shared/run enqueue https://a.com/ https://b.com/   # add sites
+dorker --coordinate /shared/run enqueue --file sites.txt                # bulk add
+dorker --coordinate /shared/run queue                                   # show the queue
+dorker --coordinate /shared/run work --config config.toml               # a worker drains it
+dorker --coordinate /shared/run work --config config.toml --watch       # stay alive for new items
+```
+
+Run as many `work` instances as you like — each atomically takes the next
+site, so no two process the same one. Each worker writes a report per site to
+`out/sites/<host>/`. `discover --enqueue` feeds discovered sites straight into
+the queue, so discovery → scan runs hands-off: one `discover --enqueue`, a few
+`work --watch` instances, and new finds get scored as they arrive.
+
 **Stop command.** To halt every running instance immediately, from any
 terminal run:
 

@@ -67,15 +67,18 @@ pub async fn crawl(
     };
     let seed_host = norm_host(&seed_url);
 
-    // Claim the whole site. If another instance already has it, do nothing.
-    if let (Some(c), Some(host)) = (coord, &seed_host) {
-        if !c.claim_site(host) {
-            return CrawlOutcome {
-                results: vec![],
-                internal: vec![],
-                external: vec![],
-                skipped_site: Some(host.clone()),
-            };
+    // Claim the whole site (host:port). If another instance already has it,
+    // do nothing. (Link-following below still scopes by host via seed_host.)
+    if let Some(c) = coord {
+        if let Some(site) = crate::coord::host_key(seed) {
+            if !c.claim_site(&site) {
+                return CrawlOutcome {
+                    results: vec![],
+                    internal: vec![],
+                    external: vec![],
+                    skipped_site: Some(site),
+                };
+            }
         }
     }
 
