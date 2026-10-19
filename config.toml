@@ -16,23 +16,23 @@ respect_robots = true
 kind = "url_list"
 path = "candidates.txt"
 
-# Option B: discover candidates through the Google Programmable Search API.
-# Comment out the block above and uncomment this one once you have a key + cx.
+# Option B: auto-discover candidates through the Google Programmable Search API.
+# Comment out the block above and uncomment this one once you have a key + cx,
+# then run:  dorker discover --config config.toml          (writes discovered.txt)
+#            dorker discover --config config.toml --scan    (discover + scan)
 # [source]
 # kind = "search_api"
 # provider = "google_cse"
 # api_key = "YOUR_API_KEY"
 # cx = "YOUR_SEARCH_ENGINE_ID"
 # max_results = 50
-# queries = [
-#   "\"Dedicated to innovating\" inurl:register",
-#   "\"The Financial Ecosystem\" inurl:\"/user/register\"",
-#   "\"Investing the Better Way\" inurl:\"a=signup\"",
-#   "\"Cloud Mining\" \"Crypto Mining\" inurl:register",
-# ]
+# # Leave queries empty to auto-generate dorks from keywords.json (recommended),
+# # or list your own to override:
+# queries = []
 #
-# NOTE: the Google Custom Search JSON API honors `inurl:` less reliably than
-# regular Google web search, so combine it with a distinctive fingerprint
-# phrase rather than relying on `inurl:` alone. The URL-pattern keywords in
-# keywords.json (target = "url") apply the same signup/register filter at the
-# verification stage, which works regardless of how candidates were found.
+# NOTE: with queries = [], dorker builds the dork queries itself from your
+# fingerprint list — quoted phrases for the distinctive categories, plus each
+# tagline combined with the inurl: filters. The Custom Search JSON API honors
+# `inurl:` less reliably than regular Google web search, which is why the
+# combos pair it with a strong phrase; the url-target keywords in keywords.json
+# also re-apply the signup/register filter at scan time regardless.

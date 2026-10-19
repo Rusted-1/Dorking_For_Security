@@ -7,6 +7,7 @@
 mod config;
 mod coord;
 mod crawl;
+mod dorks;
 mod html;
 mod http;
 mod keywords;
@@ -96,6 +97,15 @@ enum Cmd {
     Sites,
     /// Clear coordination state: all site/URL claims and any stop signal.
     Reset,
+    /// Auto-discover candidate sites via Google search dorks (needs a
+    /// search_api source in the config). Writes out/discovered.txt.
+    Discover {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        /// After discovering, scan the found sites straight through.
+        #[arg(long)]
+        scan: bool,
+    },
 }
 
 #[tokio::main]
@@ -143,6 +153,10 @@ async fn main() -> Result<()> {
             println!("Coordination state cleared in {}.", c.path().display());
             Ok(())
         }
+        Cmd::Discover { config, scan } => {
+            let coord = coordinator(&cli.coordinate, cli.solo);
+            run_discover(&config, scan, color, coord.as_ref()).await
+        }
     }
 }
 
@@ -184,7 +198,7 @@ async fn run_scan(
         .unwrap_or_else(|| "out".to_string());
 
     let kws = keywords::load_keywords(Path::new(&keywords_file))?;
-    let matcher = keywords::Matcher::new(kws)?;
+    let matcher = keywords::Matcher::new(kws.clone())?;
     if matcher.is_empty() {
         anyhow::bail!("no keywords loaded from {}", keywords_file);
     }
@@ -217,7 +231,7 @@ async fn run_scan(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no config file found and no --url given"))?;
         println!("Gathering candidates…");
-        let candidates = sources::gather_candidates(&cfg.source, &client).await?;
+        let candidates = sources::gather_candidates(&cfg.source, &client, &kws).await?;
         println!("Found {} candidate URL(s).", candidates.len());
         results = verify::verify_sites(&candidates, &matcher, &client, &fetch, coord).await;
     }
@@ -244,6 +258,78 @@ async fn run_scan(
             external.len()
         );
     }
+    if halted {
+        println!("Halted early by a stop signal — the report covers pages scanned so far.");
+    }
+    Ok(())
+}
+
+async fn run_discover(
+    config_path: &Path,
+    scan: bool,
+    color: bool,
+    coord: Option<&coord::Coordinator>,
+) -> Result<()> {
+    let cfg = config::load_config(config_path)?;
+    if !matches!(cfg.source, config::SourceConfig::SearchApi { .. }) {
+        anyhow::bail!(
+            "discover needs a [source] with kind = \"search_api\" in {}",
+            config_path.display()
+        );
+    }
+
+    let kws = keywords::load_keywords(Path::new(&cfg.keywords_file))?;
+    let matcher = keywords::Matcher::new(kws.clone())?;
+    if matcher.is_empty() {
+        anyhow::bail!("no keywords loaded from {}", cfg.keywords_file);
+    }
+    println!("Loaded {} keyword(s).", matcher.len());
+
+    let client = http::build_client(&cfg.fetch)?;
+    let out_dir = PathBuf::from(&cfg.output_dir);
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating output dir {}", out_dir.display()))?;
+
+    println!("Discovering candidate sites…");
+    let candidates = sources::gather_candidates(&cfg.source, &client, &kws).await?;
+
+    let list_path = out_dir.join("discovered.txt");
+    let body: String = candidates
+        .iter()
+        .map(|u| format!("{u}\n"))
+        .collect::<String>();
+    std::fs::write(&list_path, format!("# Discovered by dorker\n{body}"))
+        .with_context(|| format!("writing {}", list_path.display()))?;
+    println!(
+        "Discovered {} candidate URL(s) → {}",
+        candidates.len(),
+        list_path.display()
+    );
+
+    if !scan {
+        println!("Run `dorker scan` on these (or re-run with --scan) to score them.");
+        return Ok(());
+    }
+    if candidates.is_empty() {
+        println!("Nothing to scan.");
+        return Ok(());
+    }
+
+    if let Some(c) = coord {
+        c.clear_stop();
+    }
+    println!("Scanning {} discovered candidate(s)…", candidates.len());
+    let results = verify::verify_sites(&candidates, &matcher, &client, &cfg.fetch, coord).await;
+    let halted = coord.map(|c| c.stop_requested()).unwrap_or(false);
+
+    let report = report::build_report(results);
+    report::write_report(&report, &out_dir)?;
+    println!("{}", report::console_summary(&report));
+    println!("{}", report::console_ranked(&report, color));
+    println!(
+        "Reports written to {d}/report.html, {d}/report.json and {d}/report.txt",
+        d = cfg.output_dir
+    );
     if halted {
         println!("Halted early by a stop signal — the report covers pages scanned so far.");
     }

@@ -1,12 +1,16 @@
 //! Candidate discovery: where the list of URLs to check comes from.
 
 use crate::config::SourceConfig;
+use crate::dorks;
+use crate::model::Keyword;
 use anyhow::{bail, Context, Result};
 
-/// Produce the list of candidate URLs to verify.
+/// Produce the list of candidate URLs to verify. `keywords` is used to
+/// auto-generate dork queries for the search source when none are configured.
 pub async fn gather_candidates(
     source: &SourceConfig,
     client: &reqwest::Client,
+    keywords: &[Keyword],
 ) -> Result<Vec<String>> {
     match source {
         SourceConfig::UrlList { path } => from_url_list(path),
@@ -18,6 +22,21 @@ pub async fn gather_candidates(
             queries,
         } => match provider.as_str() {
             "google_cse" => {
+                // Use configured queries, or auto-build them from the keywords.
+                let auto;
+                let queries: &[String] = if queries.is_empty() {
+                    auto = dorks::build_queries(keywords);
+                    &auto
+                } else {
+                    queries
+                };
+                if queries.is_empty() {
+                    bail!(
+                        "no search queries: set `queries` in the config, or add \
+                         fingerprint keywords so they can be generated automatically"
+                    );
+                }
+                println!("Running {} dork quer(y/ies) via Google Custom Search…", queries.len());
                 google_cse(client, api_key, cx, queries, *max_results).await
             }
             other => bail!(
@@ -42,12 +61,23 @@ fn from_url_list(path: &str) -> Result<Vec<String>> {
     Ok(urls)
 }
 
+/// Extract result links from one Custom Search JSON API response body.
+fn parse_cse_items(body: &serde_json::Value) -> Vec<String> {
+    body.get("items")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|it| it.get("link").and_then(|l| l.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Discover candidates via the Google Programmable Search (Custom Search JSON) API.
 ///
-/// NOTE: this requires an API key + search-engine id (cx), and reaches
-/// googleapis.com, so it is not exercised by the offline tests. The request
-/// shape follows the Custom Search JSON API: results come back 10 per page,
-/// paged with the `start` parameter.
+/// NOTE: the live HTTP call reaches googleapis.com and needs an API key + cx,
+/// so it is not exercised by the offline tests (the response parsing is). The
+/// Custom Search JSON API returns results 10 per page, paged via `start`.
 async fn google_cse(
     client: &reqwest::Client,
     api_key: &str,
@@ -57,9 +87,6 @@ async fn google_cse(
 ) -> Result<Vec<String>> {
     if api_key.is_empty() || cx.is_empty() {
         bail!("google_cse source needs both `api_key` and `cx` set in the config");
-    }
-    if queries.is_empty() {
-        bail!("google_cse source needs at least one entry in `queries`");
     }
 
     let mut urls = Vec::new();
@@ -83,20 +110,11 @@ async fn google_cse(
             }
 
             let body: serde_json::Value = resp.json().await.context("parsing search response")?;
-            let items = body
-                .get("items")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-
+            let items = parse_cse_items(&body);
             if items.is_empty() {
                 break;
             }
-            for item in items {
-                if let Some(link) = item.get("link").and_then(|v| v.as_str()) {
-                    urls.push(link.to_string());
-                }
-            }
+            urls.extend(items);
             start += 10;
         }
     }
@@ -106,4 +124,27 @@ async fn google_cse(
     urls.retain(|u| seen.insert(u.clone()));
     urls.truncate(max_results);
     Ok(urls)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_cse_items;
+
+    #[test]
+    fn parses_links_from_items() {
+        let body = serde_json::json!({
+            "items": [
+                {"title": "A", "link": "https://a.example/"},
+                {"title": "B", "link": "https://b.example/register"},
+                {"title": "no link here"}
+            ]
+        });
+        let links = parse_cse_items(&body);
+        assert_eq!(links, vec!["https://a.example/", "https://b.example/register"]);
+    }
+
+    #[test]
+    fn empty_when_no_items() {
+        assert!(parse_cse_items(&serde_json::json!({"searchInformation": {}})).is_empty());
+    }
 }

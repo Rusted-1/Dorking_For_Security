@@ -32,6 +32,21 @@ Crawl mode also writes `out/links.md` — an inventory of every link found
 (internal pages, plus external links grouped by domain) for planning future
 dorks.
 
+**Discover** candidate sites automatically with Google search dorks (needs a
+`search_api` source configured — see below):
+
+```
+cargo run --release -- discover --config config.toml          # find sites -> out/discovered.txt
+cargo run --release -- discover --config config.toml --scan    # find and scan them
+```
+
+With `queries = []` in the config, dorker builds the dork queries itself from
+`keywords.json` (quoted phrases for the distinctive categories, plus each
+tagline paired with the `inurl:` filters). You can still hand-write `queries`
+to override. `discover` writes the found URLs to `out/discovered.txt`; add
+`--scan` to score them in the same run. Setting up the Google key + search
+engine id is described under **Auto-discovery setup** below.
+
 **Scan** a batch of candidates from a config file:
 
 ```
@@ -105,7 +120,25 @@ instant local kill.) A new scan clears any leftover stop signal automatically.
     works with no API key; ideal for a controlled environment.
   - `kind = "search_api"`, `provider = "google_cse"` with `api_key`, `cx`,
     `max_results`, and `queries` — discovers candidates via the Google
-    Programmable Search (Custom Search JSON) API.
+    Programmable Search (Custom Search JSON) API. Leave `queries = []` to
+    auto-generate dorks from the keywords.
+
+## Auto-discovery setup (Google Programmable Search)
+
+To use `discover`, create a search engine and an API key (both free tier):
+
+1. **Programmable Search Engine** — at <https://programmablesearchengine.google.com/>
+   create an engine set to **search the entire web**. Copy its **Search engine
+   ID** → that's `cx`.
+2. **API key** — at <https://console.cloud.google.com/>, enable the **Custom
+   Search API** for a project and create an API key → that's `api_key`.
+3. Put both in `config.toml` under the `search_api` source, set
+   `queries = []`, and run `dorker discover --config config.toml`.
+
+Note the free tier allows ~100 search queries/day; each dork query uses one
+(and more as it pages through results), so keep `max_results` modest while
+testing. Nothing about discovery requires Claude — it's the tool calling
+Google's API directly.
 
 ## Keywords (`keywords.json`)
 
