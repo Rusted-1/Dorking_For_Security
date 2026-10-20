@@ -28,7 +28,7 @@ pub struct Coordinator {
 impl Coordinator {
     /// Open (creating if needed) a coordination directory.
     pub fn open(dir: PathBuf) -> Result<Self> {
-        for sub in ["claims", "sites", "queue", "queue_proc"] {
+        for sub in ["claims", "sites", "queue", "queue_proc", "positives"] {
             fs::create_dir_all(dir.join(sub))
                 .with_context(|| format!("creating coordination dir {}", dir.display()))?;
         }
@@ -109,12 +109,32 @@ impl Coordinator {
 
     /// Clear all coordination state: site claims, URL claims, queue, and stop.
     pub fn reset(&self) -> Result<()> {
-        for sub in ["sites", "claims", "queue", "queue_proc"] {
+        for sub in ["sites", "claims", "queue", "queue_proc", "positives"] {
             let _ = fs::remove_dir_all(self.dir.join(sub));
             fs::create_dir_all(self.dir.join(sub))?;
         }
         self.clear_stop();
         Ok(())
+    }
+
+    // ---- Positives (shared cap + catalog) -----------------------------------
+
+    /// Record a site flagged as a positive. Deduplicated by host. Returns the
+    /// current total count of distinct positive sites.
+    pub fn record_positive(&self, host: &str) -> usize {
+        let _ = self.claim_in("positives", host, host);
+        self.positive_count()
+    }
+
+    /// How many distinct positive sites have been recorded.
+    pub fn positive_count(&self) -> usize {
+        count_dir(&self.dir.join("positives"))
+    }
+
+    /// The hosts recorded as positives, sorted.
+    #[allow(dead_code)] // used by the forthcoming status view
+    pub fn positive_list(&self) -> Vec<String> {
+        read_url_files(&self.dir.join("positives"))
     }
 
     // ---- Work queue ---------------------------------------------------------

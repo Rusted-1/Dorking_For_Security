@@ -129,6 +129,13 @@ enum Cmd {
         /// Keep running and poll for new queue items instead of exiting.
         #[arg(long)]
         watch: bool,
+        /// Stop once this many positive sites have been found (shared across
+        /// all instances). Omit for no limit.
+        #[arg(long)]
+        max_positives: Option<usize>,
+        /// A site counts as a positive when its top score is at least this.
+        #[arg(long, default_value_t = 50)]
+        positive_threshold: u32,
     },
     /// Guided setup: answer a few questions and write config.toml for you.
     Setup {
@@ -142,6 +149,12 @@ enum Cmd {
         /// Safety cap on pages per site.
         #[arg(long, default_value_t = 100)]
         max: usize,
+        /// Stop once this many positive sites have been found. Omit for no limit.
+        #[arg(long)]
+        max_positives: Option<usize>,
+        /// A site counts as a positive when its top score is at least this.
+        #[arg(long, default_value_t = 50)]
+        positive_threshold: u32,
     },
 }
 
@@ -232,16 +245,16 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Work { config, max, watch } => {
+        Cmd::Work { config, max, watch, max_positives, positive_threshold } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("worker needs a coordination directory (don't use --solo)"))?;
-            run_work(&config, max, watch, &coord).await
+            run_work(&config, max, watch, max_positives, positive_threshold, &coord).await
         }
         Cmd::Setup { config } => run_setup(&config),
-        Cmd::Auto { config, max } => {
+        Cmd::Auto { config, max, max_positives, positive_threshold } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
-            run_auto(&config, max, color, &coord).await
+            run_auto(&config, max, max_positives, positive_threshold, color, &coord).await
         }
     }
 }
@@ -339,6 +352,8 @@ fn run_setup(config_path: &Path) -> Result<()> {
 async fn run_auto(
     config_path: &Path,
     max: usize,
+    max_positives: Option<usize>,
+    positive_threshold: u32,
     color: bool,
     coord: &coord::Coordinator,
 ) -> Result<()> {
@@ -360,7 +375,7 @@ async fn run_auto(
     println!("Step 1 of 2 — discovering candidate sites…");
     run_discover(config_path, false, true, color, Some(coord)).await?;
     println!("\nStep 2 of 2 — scanning the queued sites…");
-    run_work(config_path, max, false, coord).await?;
+    run_work(config_path, max, false, max_positives, positive_threshold, coord).await?;
     println!("\nAll done. Open the reports in your browser — see out/sites/<host>/report.html");
     Ok(())
 }
@@ -569,6 +584,8 @@ async fn run_work(
     config_path: &Path,
     max: usize,
     watch: bool,
+    max_positives: Option<usize>,
+    positive_threshold: u32,
     coord: &coord::Coordinator,
 ) -> Result<()> {
     coord.clear_stop();
@@ -596,12 +613,22 @@ async fn run_work(
     println!(
         "Worker started. Queue: {pending} pending, {processing} in progress. Reports → {output_dir}/sites/<host>/"
     );
+    if let Some(cap) = max_positives {
+        println!("Will stop after {cap} positive(s) (score ≥ {positive_threshold}).");
+    }
 
     let mut done = 0usize;
     loop {
         if coord.stop_requested() {
             println!("Stop requested — worker halting.");
             break;
+        }
+        // Honor the shared positives cap before taking more work.
+        if let Some(cap) = max_positives {
+            if coord.positive_count() >= cap {
+                println!("Positive limit reached ({cap}) — worker halting.");
+                break;
+            }
         }
         let url = match coord.take_next() {
             Some(u) => u,
@@ -634,6 +661,28 @@ async fn run_work(
         );
         coord.complete(&url);
         done += 1;
+
+        // Count a positive and enforce the shared cap.
+        let top = report
+            .results
+            .iter()
+            .filter(|r| !r.excluded)
+            .map(|r| r.score)
+            .max()
+            .unwrap_or(0);
+        if top >= positive_threshold {
+            if let Some(host) = coord::host_key(&url) {
+                let count = coord.record_positive(&host);
+                println!("  positive #{count} ({top}/100)");
+                if let Some(cap) = max_positives {
+                    if count >= cap {
+                        println!("Positive limit reached ({cap}) — signaling all instances to stop.");
+                        let _ = coord.request_stop();
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     println!("Worker finished — processed {done} site(s).");

@@ -137,6 +137,23 @@ site, so no two process the same one. Each worker writes a report per site to
 the queue, so discovery → scan runs hands-off: one `discover --enqueue`, a few
 `work --watch` instances, and new finds get scored as they arrive.
 
+**Positive limit (collect a set batch, then stop).** So a run collects a
+reviewable number of hits instead of running indefinitely, pass
+`--max-positives` to `work` or `auto`. Once that many positive sites have been
+found, the run stops and signals every instance to halt — leaving the rest of
+the queue for a later batch:
+
+```
+dorker --coordinate /shared/run work --config config.toml --max-positives 10
+dorker auto --config config.toml --max-positives 20
+```
+
+A site counts as a "positive" when its top score is at least
+`--positive-threshold` (default 50 = "Possible" and up). The count is shared
+across all instances through the coordination folder, so a limit of 10 means
+10 total across the fleet, not 10 per worker. The flagged sites are also
+catalogued in the coordination folder's `positives/` list.
+
 **Stop command.** To halt every running instance immediately, from any
 terminal run:
 
