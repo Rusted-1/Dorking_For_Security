@@ -14,6 +14,7 @@ mod keywords;
 mod model;
 mod report;
 mod score;
+mod server;
 mod sources;
 mod status;
 mod verify;
@@ -162,6 +163,13 @@ enum Cmd {
         #[arg(long, default_value_t = 50)]
         positive_threshold: u32,
     },
+    /// Start the local web control panel (buttons + live status) in a browser.
+    Serve {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -271,6 +279,15 @@ async fn main() -> Result<()> {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
             run_auto(&config, max, max_positives, positive_threshold, color, &coord).await
+        }
+        Cmd::Serve { config, port } => {
+            let coord = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("the panel needs a coordination directory (don't use --solo)"))?;
+            let output_dir = config::load_config(&config)
+                .ok()
+                .map(|cfg| cfg.output_dir)
+                .unwrap_or_else(|| "out".to_string());
+            server::run_serve(port, &config, &output_dir, &coord)
         }
     }
 }

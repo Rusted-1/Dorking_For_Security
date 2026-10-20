@@ -17,3 +17,4 @@ scraper = "0.20"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 url = "2"
+tiny_http = "0.12"

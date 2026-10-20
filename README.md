@@ -23,6 +23,17 @@ cargo run --release -- setup     # answer a few questions; writes config.toml
 cargo run --release -- auto       # discover scam sites and scan them all
 ```
 
+Prefer buttons to typing? Start the **control panel** and use it in your browser:
+
+```
+cargo run --release -- serve      # then open http://localhost:8787
+```
+
+The panel shows live status (queue, positives, claimed sites, top hits) and
+has buttons for Find & scan, Discover, Start a worker, Stop, Reset, and adding
+sites to the queue — plus a box to stop after N positives. On WSL, open it in
+your Windows browser with `explorer.exe http://localhost:8787`.
+
 `setup` walks you through it in plain questions (including pasting your Google
 key, if you want auto-discovery) and writes the config for you — no hand-editing
 files. `auto` then runs the whole pipeline in one go: it discovers candidate
