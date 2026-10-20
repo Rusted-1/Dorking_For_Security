@@ -15,6 +15,7 @@ mod model;
 mod report;
 mod score;
 mod sources;
+mod status;
 mod verify;
 
 use anyhow::{Context, Result};
@@ -119,6 +120,11 @@ enum Cmd {
     },
     /// Show the shared work queue (pending + in-progress).
     Queue,
+    /// One-glance status: queue, positives, claimed sites, and top hits.
+    Status {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+    },
     /// Worker: pull sites from the queue and scan them until it's empty.
     Work {
         #[arg(long, default_value = "config.toml")]
@@ -250,11 +256,54 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("worker needs a coordination directory (don't use --solo)"))?;
             run_work(&config, max, watch, max_positives, positive_threshold, &coord).await
         }
+        Cmd::Status { config } => {
+            let c = coordinator(&cli.coordinate, false)
+                .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
+            let output_dir = config::load_config(&config)
+                .ok()
+                .map(|cfg| cfg.output_dir)
+                .unwrap_or_else(|| "out".to_string());
+            run_status(&c, &output_dir, color);
+            Ok(())
+        }
         Cmd::Setup { config } => run_setup(&config),
         Cmd::Auto { config, max, max_positives, positive_threshold } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
             run_auto(&config, max, max_positives, positive_threshold, color, &coord).await
+        }
+    }
+}
+
+/// Print a one-glance status: queue, positives, claimed sites, top hits.
+fn run_status(coord: &coord::Coordinator, output_dir: &str, color: bool) {
+    let (pending, processing) = coord.queue_counts();
+    let positives = coord.positive_list();
+    let sites = coord.list_sites();
+
+    println!("Dorker status   (coordination: {})", coord.path().display());
+    if coord.stop_requested() {
+        println!("  ** a STOP signal is currently set — runs will halt. Use `reset` to clear. **");
+    }
+    println!();
+    println!("  Queue:          {pending} pending, {processing} in progress");
+    println!("  Positives:      {} flagged", positives.len());
+    println!("  Sites claimed:  {}", sites.len());
+
+    let hits = status::top_hits(Path::new(output_dir), 10);
+    println!("\n  Top hits (from reports in {output_dir}/):");
+    if hits.is_empty() {
+        println!("    (none yet)");
+    } else {
+        for h in &hits {
+            println!("    {}  {}", score::tag(h.score, color), h.url);
+        }
+    }
+
+    if !positives.is_empty() {
+        println!("\n  Flagged sites:");
+        for p in &positives {
+            println!("    {p}");
         }
     }
 }

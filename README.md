@@ -154,6 +154,13 @@ across all instances through the coordination folder, so a limit of 10 means
 10 total across the fleet, not 10 per worker. The flagged sites are also
 catalogued in the coordination folder's `positives/` list.
 
+**Status at a glance.** One command shows the queue, how many positives have
+been flagged, which sites are claimed, and the current top-scoring hits:
+
+```
+dorker --coordinate /shared/run status
+```
+
 **Stop command.** To halt every running instance immediately, from any
 terminal run:
 
