@@ -130,6 +130,19 @@ enum Cmd {
         #[arg(long)]
         watch: bool,
     },
+    /// Guided setup: answer a few questions and write config.toml for you.
+    Setup {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+    },
+    /// One command for the whole pipeline: discover sites, then scan them all.
+    Auto {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        /// Safety cap on pages per site.
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+    },
 }
 
 #[tokio::main]
@@ -224,7 +237,132 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("worker needs a coordination directory (don't use --solo)"))?;
             run_work(&config, max, watch, &coord).await
         }
+        Cmd::Setup { config } => run_setup(&config),
+        Cmd::Auto { config, max } => {
+            let coord = coordinator(&cli.coordinate, cli.solo)
+                .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
+            run_auto(&config, max, color, &coord).await
+        }
     }
+}
+
+/// Read one line from stdin, returning `default` if the user just hits Enter.
+fn prompt(label: &str, default: &str) -> String {
+    use std::io::Write;
+    if default.is_empty() {
+        print!("{label}: ");
+    } else {
+        print!("{label} [{default}]: ");
+    }
+    let _ = std::io::stdout().flush();
+    let mut s = String::new();
+    if std::io::stdin().read_line(&mut s).is_err() {
+        return default.to_string();
+    }
+    let s = s.trim();
+    if s.is_empty() {
+        default.to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Guided setup: ask a few questions and write config.toml.
+fn run_setup(config_path: &Path) -> Result<()> {
+    println!("Dorker setup — this writes {}.\n", config_path.display());
+
+    if config_path.exists() {
+        let ans = prompt(
+            &format!("{} already exists. Overwrite it? (y/N)", config_path.display()),
+            "N",
+        );
+        if !ans.eq_ignore_ascii_case("y") {
+            println!("Left your config untouched.");
+            return Ok(());
+        }
+    }
+
+    println!("\nAuto-discovery finds scam sites for you using Google search.");
+    println!("It needs a free Google key + search-engine id. Leave the key blank");
+    println!("to skip discovery for now (you can re-run setup later).\n");
+
+    let api_key = prompt("Google API key (blank to skip)", "");
+    let search_api = !api_key.is_empty();
+    let cx = if search_api {
+        prompt("Google search-engine id (cx)", "")
+    } else {
+        String::new()
+    };
+
+    println!("\nPoliteness: how long to wait between page requests.");
+    let delay = prompt("Delay in milliseconds", "1500");
+    let output_dir = prompt("Folder for reports", "out");
+
+    let source = if search_api {
+        format!(
+            "[source]\nkind = \"search_api\"\nprovider = \"google_cse\"\n\
+             api_key = \"{api_key}\"\ncx = \"{cx}\"\nmax_results = 50\n\
+             # queries empty = auto-build dorks from keywords.json\nqueries = []\n"
+        )
+    } else {
+        "[source]\nkind = \"url_list\"\npath = \"candidates.txt\"\n".to_string()
+    };
+
+    let contents = format!(
+        "# Written by `dorker setup`.\n\
+         keywords_file = \"keywords.json\"\n\
+         output_dir = \"{output_dir}\"\n\n\
+         [fetch]\n\
+         delay_ms = {delay}\n\
+         timeout_secs = 20\n\
+         user_agent = \"Dorker/0.1 (+anti-fraud research)\"\n\
+         respect_robots = true\n\n\
+         {source}"
+    );
+
+    std::fs::write(config_path, contents)
+        .with_context(|| format!("writing {}", config_path.display()))?;
+
+    println!("\nSaved {}.", config_path.display());
+    if search_api {
+        println!("You're set for auto mode. Run:  dorker auto");
+    } else {
+        println!("No discovery key set. You can:");
+        println!("  • scan one site:   dorker scan --url https://suspect-site.com/");
+        println!("  • or add URLs to candidates.txt and run:  dorker scan --config {}", config_path.display());
+        println!("Re-run `dorker setup` any time to add a Google key for auto-discovery.");
+    }
+    Ok(())
+}
+
+/// One-command pipeline: discover sites and scan them all.
+async fn run_auto(
+    config_path: &Path,
+    max: usize,
+    color: bool,
+    coord: &coord::Coordinator,
+) -> Result<()> {
+    // Friendly pre-check so a missing key gives guidance, not a raw error.
+    match config::load_config(config_path) {
+        Ok(cfg) if matches!(cfg.source, config::SourceConfig::SearchApi { .. }) => {}
+        Ok(_) => anyhow::bail!(
+            "auto mode discovers sites via search, but {} isn't set up for it.\n\
+             Run `dorker setup` and add your Google key, or scan one site with \
+             `dorker scan --url https://…`.",
+            config_path.display()
+        ),
+        Err(_) => anyhow::bail!(
+            "no config found at {}. Run `dorker setup` first.",
+            config_path.display()
+        ),
+    }
+
+    println!("Step 1 of 2 — discovering candidate sites…");
+    run_discover(config_path, false, true, color, Some(coord)).await?;
+    println!("\nStep 2 of 2 — scanning the queued sites…");
+    run_work(config_path, max, false, coord).await?;
+    println!("\nAll done. Open the reports in your browser — see out/sites/<host>/report.html");
+    Ok(())
 }
 
 async fn run_scan(

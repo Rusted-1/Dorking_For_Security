@@ -14,6 +14,27 @@ pages the way a browser would (rate-limited, with a timeout, honoring
 cargo build --release
 ```
 
+## Quick start (easiest path)
+
+New to this? Two commands:
+
+```
+cargo run --release -- setup     # answer a few questions; writes config.toml
+cargo run --release -- auto       # discover scam sites and scan them all
+```
+
+`setup` walks you through it in plain questions (including pasting your Google
+key, if you want auto-discovery) and writes the config for you — no hand-editing
+files. `auto` then runs the whole pipeline in one go: it discovers candidate
+sites, scans each one, and writes reports to `out/sites/<host>/`. Open any
+`report.html` in a browser. To check a single site without any setup:
+
+```
+cargo run --release -- scan --url https://suspect-site.com/
+```
+
+The rest of this file covers the individual commands and finer controls.
+
 ## Usage
 
 **Crawl** one site — give a start URL and it scans that page plus every
