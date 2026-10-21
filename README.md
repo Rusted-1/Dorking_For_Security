@@ -8,6 +8,20 @@ It does **not** attack, log into, or submit anything to any site — it fetches
 pages the way a browser would (rate-limited, with a timeout, honoring
 `robots.txt`) and looks for text and URL patterns.
 
+## Install (Linux / WSL)
+
+One-time: install WSL on Windows with `wsl --install` (admin PowerShell), then
+in WSL run the installer from the extracted bundle (or a clone of this repo):
+
+```
+./install.sh
+```
+
+It copies Dorker into `~/dorker`, makes it runnable, offers to install Rust
+and build from source if needed, optionally runs the setup wizard, and prints
+how to start the control panel. Re-running it keeps your edited
+`keywords.json` / `config.toml`.
+
 ## Build
 
 ```
