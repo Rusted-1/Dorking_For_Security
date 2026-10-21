@@ -377,30 +377,8 @@ fn run_setup(config_path: &Path) -> Result<()> {
     let delay = prompt("Delay in milliseconds", "1500");
     let output_dir = prompt("Folder for reports", "out");
 
-    let source = if search_api {
-        format!(
-            "[source]\nkind = \"search_api\"\nprovider = \"google_cse\"\n\
-             api_key = \"{api_key}\"\ncx = \"{cx}\"\nmax_results = 50\n\
-             # queries empty = auto-build dorks from keywords.json\nqueries = []\n"
-        )
-    } else {
-        "[source]\nkind = \"url_list\"\npath = \"candidates.txt\"\n".to_string()
-    };
-
-    let contents = format!(
-        "# Written by `dorker setup`.\n\
-         keywords_file = \"keywords.json\"\n\
-         output_dir = \"{output_dir}\"\n\n\
-         [fetch]\n\
-         delay_ms = {delay}\n\
-         timeout_secs = 20\n\
-         user_agent = \"Dorker/0.1 (+anti-fraud research)\"\n\
-         respect_robots = true\n\n\
-         {source}"
-    );
-
-    std::fs::write(config_path, contents)
-        .with_context(|| format!("writing {}", config_path.display()))?;
+    let delay_ms: u64 = delay.parse().unwrap_or(1500);
+    config::write_config_file(config_path, &api_key, &cx, delay_ms, &output_dir)?;
 
     println!("\nSaved {}.", config_path.display());
     if search_api {

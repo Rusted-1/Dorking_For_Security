@@ -4,6 +4,39 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
+/// Write a config.toml. A non-empty `api_key` produces a search_api (auto
+/// discovery) source; otherwise a url_list source. Shared by the `setup`
+/// wizard and the control panel's setup form.
+pub fn write_config_file(
+    path: &Path,
+    api_key: &str,
+    cx: &str,
+    delay_ms: u64,
+    output_dir: &str,
+) -> Result<()> {
+    let source = if !api_key.is_empty() {
+        format!(
+            "[source]\nkind = \"search_api\"\nprovider = \"google_cse\"\n\
+             api_key = \"{api_key}\"\ncx = \"{cx}\"\nmax_results = 50\n\
+             # queries empty = auto-build dorks from keywords.json\nqueries = []\n"
+        )
+    } else {
+        "[source]\nkind = \"url_list\"\npath = \"candidates.txt\"\n".to_string()
+    };
+    let contents = format!(
+        "# Written by Dorker setup.\n\
+         keywords_file = \"keywords.json\"\n\
+         output_dir = \"{output_dir}\"\n\n\
+         [fetch]\n\
+         delay_ms = {delay_ms}\n\
+         timeout_secs = 20\n\
+         user_agent = \"Dorker/0.1 (+anti-fraud research)\"\n\
+         respect_robots = true\n\n\
+         {source}"
+    );
+    std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub keywords_file: String,

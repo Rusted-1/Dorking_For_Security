@@ -37,7 +37,25 @@ pub fn run_serve(
                 respond_html(req, PAGE);
             }
             (Method::Get, "/api/status") => {
-                respond_json(req, &status_json(coord, output_dir));
+                respond_json(req, &status_json(coord, output_dir, &config));
+            }
+            (Method::Post, "/api/setup") => {
+                let mut body = String::new();
+                let mut req = req;
+                let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
+                let v: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
+                let api_key = v.get("api_key").and_then(|x| x.as_str()).unwrap_or("").trim();
+                let cx = v.get("cx").and_then(|x| x.as_str()).unwrap_or("").trim();
+                let delay = v.get("delay").and_then(|x| x.as_u64()).unwrap_or(1500);
+                let outd = v.get("output_dir").and_then(|x| x.as_str()).unwrap_or("out");
+                match crate::config::write_config_file(Path::new(&config), api_key, cx, delay, outd) {
+                    Ok(_) => respond_json(req, r#"{"ok":true,"msg":"Settings saved."}"#),
+                    Err(e) => respond_json(
+                        req,
+                        &format!(r#"{{"ok":false,"msg":"Could not save: {}"}}"#, e),
+                    ),
+                }
             }
             (Method::Post, "/api/discover") => {
                 spawn_child(&exe, &coord_dir, &["discover", "--config", &config, "--enqueue"]);
@@ -119,11 +137,19 @@ pub fn run_serve(
     Ok(())
 }
 
-fn status_json(coord: &Coordinator, output_dir: &str) -> String {
+fn status_json(coord: &Coordinator, output_dir: &str, config_path: &str) -> String {
     let (pending, processing) = coord.queue_counts();
     let positives = coord.positive_count();
     let sites = coord.list_sites().len();
     let stop = coord.stop_requested();
+    // Discovery is configured when a search_api source has a non-empty key.
+    let configured = crate::config::load_config(Path::new(config_path))
+        .ok()
+        .map(|c| match c.source {
+            crate::config::SourceConfig::SearchApi { api_key, .. } => !api_key.is_empty(),
+            _ => false,
+        })
+        .unwrap_or(false);
     let hits = status::top_hits(Path::new(output_dir), 10);
     let hits_json: Vec<serde_json::Value> = hits
         .iter()
@@ -138,6 +164,7 @@ fn status_json(coord: &Coordinator, output_dir: &str) -> String {
         "positives": positives,
         "sites": sites,
         "stop": stop,
+        "configured": configured,
         "hits": hits_json,
     })
     .to_string()
@@ -246,6 +273,17 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
   <div id="stopbanner" class="stopbanner" hidden>A STOP signal is set — runs will halt. Click Reset to clear it.</div>
 
   <div class="card">
+    <h2>Setup (one time)</h2>
+    <p class="muted" style="margin-top:0">For auto-discovery, paste your free Google key and search-engine id, then Save. Leave blank to skip (you can still scan sites you paste in).</p>
+    <div class="row">
+      <input type="text" id="apikey" placeholder="Google API key" style="flex:1;min-width:200px">
+      <input type="text" id="cx" placeholder="Search engine id (cx)" style="flex:1;min-width:160px">
+      <button onclick="saveSetup()">Save settings</button>
+    </div>
+    <p id="cfgstate" class="muted" style="margin-bottom:0"></p>
+  </div>
+
+  <div class="card">
     <h2>Status</h2>
     <div class="stats">
       <div class="stat"><b id="s-pending">–</b><span>queued</span></div>
@@ -313,6 +351,10 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
     if(!u){msg('Enter a URL first.');return;}
     fetch('/api/scan-url',{method:'POST',body:u}).then(r=>r.json()).then(d=>{msg(d.msg||'Scanning…');document.getElementById('one').value='';refresh();}).catch(()=>msg('Request failed.'));
   }
+  function saveSetup(){
+    var payload={api_key:document.getElementById('apikey').value.trim(),cx:document.getElementById('cx').value.trim()};
+    fetch('/api/setup',{method:'POST',body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{msg(d.msg||'Saved.');refresh();}).catch(()=>msg('Request failed.'));
+  }
   function refresh(){
     fetch('/api/status').then(r=>r.json()).then(d=>{
       document.getElementById('s-pending').textContent=d.pending;
@@ -320,6 +362,8 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
       document.getElementById('s-positives').textContent=d.positives;
       document.getElementById('s-sites').textContent=d.sites;
       document.getElementById('stopbanner').hidden=!d.stop;
+      var cs=document.getElementById('cfgstate');
+      cs.textContent=d.configured?'Auto-discovery is set up ✓':'Auto-discovery not set up — paste a Google key above, or just use “Scan one site”.';
       var h=document.getElementById('hits');
       if(!d.hits||!d.hits.length){h.innerHTML='<p class="muted">No hits yet.</p>';return;}
       h.innerHTML=d.hits.map(function(x){

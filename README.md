@@ -30,7 +30,8 @@ cargo run --release -- serve      # then open http://localhost:8787
 ```
 
 The panel shows live status (queue, positives, claimed sites, top hits) and
-has buttons for everything, so a user never touches the terminal: a big
+has buttons for everything, so a user never touches the terminal: a one-time
+**Setup** form (paste your Google key to enable discovery), a big
 **Start / Stop** pair, Discover, Start a worker, Reset, **Quit panel**, a
 **"scan one site"** box, an add-to-queue box, and a "stop after N positives"
 field. Top hits are clickable — each opens that site's full colored report.
