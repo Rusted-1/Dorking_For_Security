@@ -66,9 +66,30 @@ pub fn run_serve(
                 spawn_child_owned(&exe, &coord_dir, &args);
                 respond_json(req, r#"{"ok":true,"msg":"Worker started (watching the queue)."}"#);
             }
+            (Method::Post, "/api/scan-url") => {
+                let mut body = String::new();
+                let mut req = req;
+                let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
+                let url = body.trim().lines().next().unwrap_or("").trim().to_string();
+                if url.is_empty() {
+                    respond_json(req, r#"{"ok":false,"msg":"Enter a URL first."}"#);
+                } else {
+                    coord.enqueue(&url);
+                    spawn_child(&exe, &coord_dir, &["work", "--config", &config]);
+                    respond_json(req, r#"{"ok":true,"msg":"Scanning that site…"}"#);
+                }
+            }
             (Method::Post, "/api/stop") => {
                 let _ = coord.request_stop();
                 respond_json(req, r#"{"ok":true,"msg":"Stop signal sent."}"#);
+            }
+            (Method::Post, "/api/quit") => {
+                respond_json(req, r#"{"ok":true,"msg":"Shutting the panel down…"}"#);
+                println!("Panel shut down from the browser. Goodbye.");
+                std::process::exit(0);
+            }
+            (Method::Get, p) if p.starts_with("/reports/") => {
+                serve_report_file(req, output_dir, &p["/reports/".len()..]);
             }
             (Method::Post, "/api/reset") => {
                 let _ = coord.reset();
@@ -106,7 +127,10 @@ fn status_json(coord: &Coordinator, output_dir: &str) -> String {
     let hits = status::top_hits(Path::new(output_dir), 10);
     let hits_json: Vec<serde_json::Value> = hits
         .iter()
-        .map(|h| serde_json::json!({"score": h.score, "url": h.url}))
+        .map(|h| {
+            let report = format!("/reports/sites/{}/report.html", crate::coord::safe_host(&h.url));
+            serde_json::json!({"score": h.score, "url": h.url, "report": report})
+        })
         .collect();
     serde_json::json!({
         "pending": pending,
@@ -142,6 +166,32 @@ fn spawn_child_owned(exe: &Path, coord_dir: &Path, args: &[String]) {
     spawn_child(exe, coord_dir, &refs);
 }
 
+/// Serve a saved report file under `output_dir` (read-only, no path escapes).
+fn serve_report_file(req: tiny_http::Request, output_dir: &str, rel: &str) {
+    // Reject anything that could climb out of the output directory.
+    if rel.contains("..") || rel.starts_with('/') {
+        let _ = req.respond(Response::from_string("bad path").with_status_code(400));
+        return;
+    }
+    let full = Path::new(output_dir).join(rel);
+    match std::fs::read(&full) {
+        Ok(bytes) => {
+            let ctype: &[u8] = if rel.ends_with(".html") {
+                b"text/html; charset=utf-8"
+            } else if rel.ends_with(".json") {
+                b"application/json"
+            } else {
+                b"text/plain; charset=utf-8"
+            };
+            let header = Header::from_bytes(&b"Content-Type"[..], ctype).unwrap();
+            let _ = req.respond(Response::from_data(bytes).with_header(header));
+        }
+        Err(_) => {
+            let _ = req.respond(Response::from_string("report not found").with_status_code(404));
+        }
+    }
+}
+
 fn respond_html(req: tiny_http::Request, body: &str) {
     let header = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap();
     let _ = req.respond(Response::from_string(body).with_header(header));
@@ -175,6 +225,7 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
   button:hover{border-color:var(--accent)}
   button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
   button.danger{color:#fff;background:#e5484d;border-color:#e5484d}
+  button.big{font-size:16px;padding:12px 20px}
   label{font-size:13px;color:var(--muted)} input[type=number]{width:72px}
   input,textarea{font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
   textarea{width:100%;min-height:68px;font-family:var(--mono);font-size:12px}
@@ -205,22 +256,37 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
   </div>
 
   <div class="card">
-    <h2>Actions</h2>
+    <h2>Start / Stop</h2>
     <div class="row" style="margin-bottom:12px">
       <label>Stop after <input type="number" id="positives" min="1" placeholder="∞" style="width:64px"> positives</label>
     </div>
     <div class="row">
-      <button class="primary" onclick="act('/api/auto',true)">Find &amp; scan (auto)</button>
-      <button onclick="act('/api/discover')">Discover only</button>
-      <button onclick="act('/api/worker',true)">Start a worker</button>
-      <button class="danger" onclick="act('/api/stop')">Stop everything</button>
-      <button onclick="if(confirm('Clear the queue, claims, positives and stop signal?'))act('/api/reset')">Reset</button>
+      <button class="primary big" onclick="act('/api/auto',true)">▶ Start (find &amp; scan)</button>
+      <button class="danger big" onclick="act('/api/stop')">■ Stop</button>
     </div>
     <p id="msg"></p>
   </div>
 
   <div class="card">
-    <h2>Add sites to the queue</h2>
+    <h2>More actions</h2>
+    <div class="row">
+      <button onclick="act('/api/discover')">Discover only</button>
+      <button onclick="act('/api/worker',true)">Start a worker</button>
+      <button onclick="if(confirm('Clear the queue, claims, positives and stop signal?'))act('/api/reset')">Reset everything</button>
+      <button onclick="if(confirm('Shut the control panel down?'))fetch('/api/quit',{method:'POST'}).then(()=>msg('Panel is shutting down — you can close this tab.'))">Quit panel</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Scan one site now</h2>
+    <div class="row">
+      <input type="text" id="one" placeholder="https://suspect-site.com/" style="flex:1;min-width:220px">
+      <button class="primary" onclick="scanOne()">Scan it</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Add several sites to the queue</h2>
     <textarea id="urls" placeholder="https://site-a.com/&#10;https://site-b.com/"></textarea>
     <div class="row" style="margin-top:10px"><button onclick="enqueue()">Add to queue</button></div>
   </div>
@@ -242,6 +308,11 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
     var body=document.getElementById('urls').value;
     fetch('/api/enqueue',{method:'POST',body:body}).then(r=>r.json()).then(d=>{msg(d.msg||'Queued.');document.getElementById('urls').value='';refresh();}).catch(()=>msg('Request failed.'));
   }
+  function scanOne(){
+    var u=document.getElementById('one').value.trim();
+    if(!u){msg('Enter a URL first.');return;}
+    fetch('/api/scan-url',{method:'POST',body:u}).then(r=>r.json()).then(d=>{msg(d.msg||'Scanning…');document.getElementById('one').value='';refresh();}).catch(()=>msg('Request failed.'));
+  }
   function refresh(){
     fetch('/api/status').then(r=>r.json()).then(d=>{
       document.getElementById('s-pending').textContent=d.pending;
@@ -252,8 +323,10 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
       var h=document.getElementById('hits');
       if(!d.hits||!d.hits.length){h.innerHTML='<p class="muted">No hits yet.</p>';return;}
       h.innerHTML=d.hits.map(function(x){
+        var safe=x.url.replace(/</g,'&lt;');
+        var link=x.report?('<a href="'+x.report+'" target="_blank" rel="noopener">'+safe+'</a>'):('<span class="muted">'+safe+'</span>');
         return '<div class="hit"><span class="badge '+band(x.score)+'">'+x.score+'/100</span>'+
-               '<span>'+label(x.score)+'</span><span class="muted">'+x.url.replace(/</g,'&lt;')+'</span></div>';
+               '<span>'+label(x.score)+'</span>'+link+'</div>';
       }).join('');
     }).catch(()=>{});
   }

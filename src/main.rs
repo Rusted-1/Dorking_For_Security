@@ -638,14 +638,6 @@ async fn run_discover(
     Ok(())
 }
 
-/// Filesystem-safe folder name for a host (for per-site report dirs).
-fn safe_host(url: &str) -> String {
-    let host = coord::host_key(url).unwrap_or_else(|| "site".to_string());
-    host.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
-        .collect()
-}
-
 async fn run_work(
     config_path: &Path,
     max: usize,
@@ -716,7 +708,7 @@ async fn run_work(
             continue;
         }
 
-        let site_dir = PathBuf::from(&output_dir).join("sites").join(safe_host(&url));
+        let site_dir = PathBuf::from(&output_dir).join("sites").join(coord::safe_host(&url));
         let report = report::build_report(outcome.results);
         report::write_report(&report, &site_dir)?;
         report::write_links(&url, &outcome.internal, &outcome.external, &site_dir)?;

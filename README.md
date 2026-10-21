@@ -30,9 +30,13 @@ cargo run --release -- serve      # then open http://localhost:8787
 ```
 
 The panel shows live status (queue, positives, claimed sites, top hits) and
-has buttons for Find & scan, Discover, Start a worker, Stop, Reset, and adding
-sites to the queue — plus a box to stop after N positives. On WSL, open it in
-your Windows browser with `explorer.exe http://localhost:8787`.
+has buttons for everything, so a user never touches the terminal: a big
+**Start / Stop** pair, Discover, Start a worker, Reset, **Quit panel**, a
+**"scan one site"** box, an add-to-queue box, and a "stop after N positives"
+field. Top hits are clickable — each opens that site's full colored report.
+On WSL, open it in your Windows browser with
+`explorer.exe http://localhost:8787`, or double-click the included
+`Dorker-Panel.bat`.
 
 `setup` walks you through it in plain questions (including pasting your Google
 key, if you want auto-discovery) and writes the config for you — no hand-editing

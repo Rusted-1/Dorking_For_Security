@@ -224,6 +224,15 @@ fn count_dir(dir: &Path) -> usize {
     fs::read_dir(dir).map(|e| e.flatten().count()).unwrap_or(0)
 }
 
+/// Filesystem-safe folder name for a URL's site (used for per-site report
+/// directories, e.g. `out/sites/<safe_host>/`).
+pub fn safe_host(url: &str) -> String {
+    let host = host_key(url).unwrap_or_else(|| "site".to_string());
+    host.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect()
+}
+
 /// Normalized site identity of a URL: lowercased host (leading `www.`
 /// stripped), with the port appended when the URL specifies one. Two services
 /// on the same host but different ports are distinct sites.
