@@ -219,6 +219,11 @@ instant local kill.) A new scan clears any leftover stop signal automatically.
 
 ## Configuration (`config.toml`)
 
+`config.toml` is created by `dorker setup` (or the panel's Setup form). It is
+**git-ignored on purpose** — it holds your real Google API key, so it must
+never be committed. A key-free template, `config.example.toml`, is tracked;
+copy it to `config.toml` if you want to edit by hand instead of using setup.
+
 - `keywords_file` — path to the keyword data file.
 - `output_dir` — where reports are written.
 - `[fetch]` — `delay_ms` (politeness delay between requests), `timeout_secs`,
