@@ -1,0 +1,27 @@
+name: windows-build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NASM (needed to build the TLS crypto library)
+        run: choco install nasm -y
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Publish dorker.exe as a release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-build
+          name: Dorker Windows build
+          body: Native Windows build of dorker.exe (updated automatically on each push to main).
+          files: target/release/dorker.exe
