@@ -8,6 +8,20 @@ It does **not** attack, log into, or submit anything to any site — it fetches
 pages the way a browser would (rate-limited, with a timeout, honoring
 `robots.txt`) and looks for text and URL patterns.
 
+## Keep secrets out of git
+
+Your real Google key lives in `config.toml`, which is git-ignored. As an extra
+guardrail, the repo ships a pre-commit hook that blocks any commit containing a
+key-shaped string. Enable it once per clone:
+
+```
+git config core.hooksPath hooks
+```
+
+After that, a commit that includes something like an API key, token, or
+private key is rejected with a message (override a false alarm with
+`git commit --no-verify`).
+
 ## Choose your version
 
 Dorker runs natively on both Windows and Linux — pick whichever you're on:

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Dorker pre-commit guard: blocks commits that look like they contain a secret
+# (API keys, tokens, private keys, or a filled-in api_key/cx value).
+#
+# Enable once per clone:   git config core.hooksPath hooks
+# Bypass for a false alarm: git commit --no-verify
+
+# Only look at newly added lines in staged changes, excluding this hooks dir
+# (so the patterns written here don't flag themselves).
+added=$(git diff --cached --no-color -- . ':(exclude)hooks/' \
+        | grep '^+' | grep -v '^+++' | sed 's/^+//')
+
+hits=$(printf '%s\n' "$added" | grep -nE \
+  'AIza[0-9A-Za-z_-]{20,}|sbh_[0-9a-f]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer [A-Za-z0-9._-]{20,}|(api_key|cx|secret|token|password)[[:space:]]*=[[:space:]]*"[^"]+"' \
+  | grep -viE 'YOUR_API_KEY|YOUR_SEARCH_ENGINE_ID|\{api_key\}|\{cx\}|= ""')
+
+if [ -n "$hits" ]; then
+  echo "=============================================================="
+  echo " Commit BLOCKED — this looks like it contains a secret:"
+  echo "--------------------------------------------------------------"
+  printf '%s\n' "$hits"
+  echo "--------------------------------------------------------------"
+  echo " Real key? Remove it — put keys in config.toml (git-ignored)."
+  echo " False alarm? Commit with:  git commit --no-verify"
+  echo "=============================================================="
+  exit 1
+fi
+exit 0
