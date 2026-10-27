@@ -22,6 +22,22 @@ After that, a commit that includes something like an API key, token, or
 private key is rejected with a message (override a false alarm with
 `git commit --no-verify`).
 
+**Gitleaks in the pipeline.** On top of the hook, GitHub Actions
+(`.github/workflows/gitleaks.yml`) runs [gitleaks](https://github.com/gitleaks/gitleaks)
+on every push and pull request, scanning the full history and failing the
+build if a secret is found — a last line of defense before anything is merged
+or published.
+
+For the strongest local check, install gitleaks and the hook uses it
+automatically (same engine as CI):
+
+- Windows: `winget install gitleaks`  (or `scoop install gitleaks`)
+- Linux/WSL: download the binary from the gitleaks releases page and put it on
+  your `PATH`
+
+Without gitleaks installed, the hook falls back to a built-in regex scan, so
+you're covered either way.
+
 ## Choose your version
 
 Dorker runs natively on both Windows and Linux — pick whichever you're on:

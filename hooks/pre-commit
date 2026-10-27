@@ -4,7 +4,22 @@
 #
 # Enable once per clone:   git config core.hooksPath hooks
 # Bypass for a false alarm: git commit --no-verify
+#
+# If gitleaks is installed it's used (same engine as the CI pipeline);
+# otherwise a built-in regex scan runs so the hook still protects you.
 
+if command -v gitleaks >/dev/null 2>&1; then
+  if gitleaks protect --staged --redact --no-banner; then
+    exit 0
+  fi
+  echo
+  echo "Commit BLOCKED by gitleaks — a secret was detected (see above)."
+  echo "Real key? Remove it (keys go in config.toml, which is git-ignored)."
+  echo "False alarm? Commit with:  git commit --no-verify"
+  exit 1
+fi
+
+# ---- Fallback regex scan (when gitleaks isn't installed) ------------------
 # Only look at newly added lines in staged changes, excluding this hooks dir
 # (so the patterns written here don't flag themselves).
 added=$(git diff --cached --no-color -- . ':(exclude)hooks/' \
