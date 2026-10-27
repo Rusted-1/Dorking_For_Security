@@ -8,6 +8,20 @@ It does **not** attack, log into, or submit anything to any site — it fetches
 pages the way a browser would (rate-limited, with a timeout, honoring
 `robots.txt`) and looks for text and URL patterns.
 
+## Choose your version
+
+Dorker runs natively on both Windows and Linux — pick whichever you're on:
+
+- **Windows (easiest, no WSL):** grab `dorker.exe` from the `windows-build`
+  release, put it in a folder with `keywords.json` and
+  `windows/Dorker-Panel.bat`, and double-click the `.bat` — the control panel
+  opens in your browser. See `windows/QUICKSTART-Windows.txt`. (The `.exe` is
+  built automatically by `.github/workflows/windows-build.yml` on every push.)
+- **Linux / WSL:** use the prebuilt Linux binary (or build from source) and
+  the `install.sh` steps below.
+
+Everything (commands, the control panel, reports) works the same on both.
+
 ## Install (Linux / WSL)
 
 One-time: install WSL on Windows with `wsl --install` (admin PowerShell), then

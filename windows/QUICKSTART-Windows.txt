@@ -1,0 +1,28 @@
+Dorker - Quick Start (Windows)
+
+No WSL, no install needed. Just this folder.
+
+1. Unzip this folder anywhere (e.g. your Desktop).
+
+2. Double-click  Dorker-Panel.bat
+   - A small black window opens and your web browser opens the control panel.
+   - First time, Windows SmartScreen may say "Windows protected your PC"
+     because the app isn't code-signed. Click "More info" -> "Run anyway".
+     (Same reason your antivirus may ask - it's an unsigned new program.)
+
+3. In the panel (your browser):
+   - Setup (optional): paste your Google API key + search-engine id, click Save,
+     to turn on auto-discovery. Leave blank to skip.
+   - Start: find & scan.  Or paste one link into "Scan one site".
+   - Click any result to open its full colored report.
+   - "Stop after N positives" box: collect a set batch, then it stops.
+
+4. To stop: click "Quit panel" in the browser, or close the black window.
+
+What the scores mean:
+    1-25  Very unlikely      76-85  Likely
+   26-50  Unlikely           86-90  Very likely
+   51-75  Possible           91-100 Almost certain
+
+For authorized anti-fraud research. Dorker reads public pages politely -
+it never logs in, attacks, or submits anything.
