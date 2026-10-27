@@ -5,3 +5,8 @@ Cargo.lock
 config.toml
 config.local.toml
 keywords.local.json
+# Environment files almost always hold secrets — never commit them.
+.env
+.env.*
+*.env
+!.env.example
