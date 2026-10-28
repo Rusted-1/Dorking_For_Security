@@ -9,14 +9,16 @@ use std::path::Path;
 /// wizard and the control panel's setup form.
 pub fn write_config_file(
     path: &Path,
+    provider: &str,
     api_key: &str,
     cx: &str,
     delay_ms: u64,
     output_dir: &str,
 ) -> Result<()> {
     let source = if !api_key.is_empty() {
+        // `cx` is only used by google_cse; harmless (empty) for other providers.
         format!(
-            "[source]\nkind = \"search_api\"\nprovider = \"google_cse\"\n\
+            "[source]\nkind = \"search_api\"\nprovider = \"{provider}\"\n\
              api_key = \"{api_key}\"\ncx = \"{cx}\"\nmax_results = 50\n\
              # queries empty = auto-build dorks from keywords.json\nqueries = []\n"
         )

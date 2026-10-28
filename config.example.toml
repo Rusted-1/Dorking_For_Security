@@ -16,23 +16,25 @@ respect_robots = true
 kind = "url_list"
 path = "candidates.txt"
 
-# Option B: auto-discover candidates through the Google Programmable Search API.
-# Comment out the block above and uncomment this one once you have a key + cx,
-# then run:  dorker discover --config config.toml          (writes discovered.txt)
-#            dorker discover --config config.toml --scan    (discover + scan)
+# Option B: auto-discover candidates through a search API (Serper — real
+# Google results via a simple key from https://serper.dev, free credits).
+# Easiest via `dorker setup` or the panel's Setup form, which write this for
+# you. Then run:  dorker discover --config config.toml          (writes discovered.txt)
+#                 dorker discover --config config.toml --scan    (discover + scan)
 # [source]
 # kind = "search_api"
-# provider = "google_cse"
-# api_key = "YOUR_API_KEY"
-# cx = "YOUR_SEARCH_ENGINE_ID"
+# provider = "serper"
+# api_key = "YOUR_SERPER_KEY"
+# cx = ""                      # not used by serper (only google_cse needs it)
 # max_results = 50
 # # Leave queries empty to auto-generate dorks from keywords.json (recommended),
 # # or list your own to override:
 # queries = []
 #
-# NOTE: with queries = [], dorker builds the dork queries itself from your
-# fingerprint list — quoted phrases for the distinctive categories, plus each
-# tagline combined with the inurl: filters. The Custom Search JSON API honors
-# `inurl:` less reliably than regular Google web search, which is why the
-# combos pair it with a strong phrase; the url-target keywords in keywords.json
-# also re-apply the signup/register filter at scan time regardless.
+# NOTE: with queries = [], dorker builds the dork queries from your fingerprint
+# list — quoted phrases for the distinctive categories, plus each tagline
+# combined with the inurl: filters.
+#
+# provider = "google_cse" is still supported for anyone who already has a
+# Google Custom Search key (api_key + cx), but Google has closed that API to
+# new sign-ups, so new users should use serper.

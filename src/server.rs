@@ -46,10 +46,9 @@ pub fn run_serve(
                 let v: serde_json::Value =
                     serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
                 let api_key = v.get("api_key").and_then(|x| x.as_str()).unwrap_or("").trim();
-                let cx = v.get("cx").and_then(|x| x.as_str()).unwrap_or("").trim();
                 let delay = v.get("delay").and_then(|x| x.as_u64()).unwrap_or(1500);
                 let outd = v.get("output_dir").and_then(|x| x.as_str()).unwrap_or("out");
-                match crate::config::write_config_file(Path::new(&config), api_key, cx, delay, outd) {
+                match crate::config::write_config_file(Path::new(&config), "serper", api_key, "", delay, outd) {
                     Ok(_) => respond_json(req, r#"{"ok":true,"msg":"Settings saved."}"#),
                     Err(e) => respond_json(
                         req,
@@ -274,10 +273,9 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
 
   <div class="card">
     <h2>Setup (one time)</h2>
-    <p class="muted" style="margin-top:0">For auto-discovery, paste your free Google key and search-engine id, then Save. Leave blank to skip (you can still scan sites you paste in).</p>
+    <p class="muted" style="margin-top:0">For auto-discovery, paste your free Serper API key (get one at serper.dev), then Save. Leave blank to skip — you can still scan sites you paste in.</p>
     <div class="row">
-      <input type="text" id="apikey" placeholder="Google API key" style="flex:1;min-width:200px">
-      <input type="text" id="cx" placeholder="Search engine id (cx)" style="flex:1;min-width:160px">
+      <input type="text" id="apikey" placeholder="Serper API key" style="flex:1;min-width:240px">
       <button onclick="saveSetup()">Save settings</button>
     </div>
     <p id="cfgstate" class="muted" style="margin-bottom:0"></p>
@@ -352,7 +350,7 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
     fetch('/api/scan-url',{method:'POST',body:u}).then(r=>r.json()).then(d=>{msg(d.msg||'Scanning…');document.getElementById('one').value='';refresh();}).catch(()=>msg('Request failed.'));
   }
   function saveSetup(){
-    var payload={api_key:document.getElementById('apikey').value.trim(),cx:document.getElementById('cx').value.trim()};
+    var payload={api_key:document.getElementById('apikey').value.trim()};
     fetch('/api/setup',{method:'POST',body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{msg(d.msg||'Saved.');refresh();}).catch(()=>msg('Request failed.'));
   }
   function refresh(){

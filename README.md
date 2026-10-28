@@ -10,7 +10,7 @@ pages the way a browser would (rate-limited, with a timeout, honoring
 
 ## Keep secrets out of git
 
-Your real Google key lives in `config.toml`, which is git-ignored. As an extra
+Your real search API key lives in `config.toml`, which is git-ignored. As an extra
 guardrail, the repo ships a pre-commit hook that blocks any commit containing a
 key-shaped string. Enable it once per clone:
 
@@ -89,7 +89,7 @@ cargo run --release -- serve      # then open http://localhost:8787
 
 The panel shows live status (queue, positives, claimed sites, top hits) and
 has buttons for everything, so a user never touches the terminal: a one-time
-**Setup** form (paste your Google key to enable discovery), a big
+**Setup** form (paste your Serper key to enable discovery), a big
 **Start / Stop** pair, Discover, Start a worker, Reset, **Quit panel**, a
 **"scan one site"** box, an add-to-queue box, and a "stop after N positives"
 field. Top hits are clickable — each opens that site's full colored report.
@@ -97,7 +97,7 @@ On WSL, open it in your Windows browser with
 `explorer.exe http://localhost:8787`, or double-click the included
 `Dorker-Panel.bat`.
 
-`setup` walks you through it in plain questions (including pasting your Google
+`setup` walks you through it in plain questions (including pasting your Serper
 key, if you want auto-discovery) and writes the config for you — no hand-editing
 files. `auto` then runs the whole pipeline in one go: it discovers candidate
 sites, scans each one, and writes reports to `out/sites/<host>/`. Open any
@@ -127,7 +127,7 @@ Crawl mode also writes `out/links.md` — an inventory of every link found
 (internal pages, plus external links grouped by domain) for planning future
 dorks.
 
-**Discover** candidate sites automatically with Google search dorks (needs a
+**Discover** candidate sites automatically with search-engine dorks (needs a
 `search_api` source configured — see below):
 
 ```
@@ -139,8 +139,8 @@ With `queries = []` in the config, dorker builds the dork queries itself from
 `keywords.json` (quoted phrases for the distinctive categories, plus each
 tagline paired with the `inurl:` filters). You can still hand-write `queries`
 to override. `discover` writes the found URLs to `out/discovered.txt`; add
-`--scan` to score them in the same run. Setting up the Google key + search
-engine id is described under **Auto-discovery setup** below.
+`--scan` to score them in the same run. Setting up the search API key is
+described under **Auto-discovery setup** below.
 
 **Scan** a batch of candidates from a config file:
 
@@ -250,7 +250,7 @@ instant local kill.) A new scan clears any leftover stop signal automatically.
 ## Configuration (`config.toml`)
 
 `config.toml` is created by `dorker setup` (or the panel's Setup form). It is
-**git-ignored on purpose** — it holds your real Google API key, so it must
+**git-ignored on purpose** — it holds your real search API key, so it must
 never be committed. A key-free template, `config.example.toml`, is tracked;
 copy it to `config.toml` if you want to edit by hand instead of using setup.
 
@@ -261,27 +261,31 @@ copy it to `config.toml` if you want to edit by hand instead of using setup.
 - `[source]` — where candidate URLs come from:
   - `kind = "url_list"` with `path = "candidates.txt"` (one URL per line) —
     works with no API key; ideal for a controlled environment.
-  - `kind = "search_api"`, `provider = "google_cse"` with `api_key`, `cx`,
-    `max_results`, and `queries` — discovers candidates via the Google
-    Programmable Search (Custom Search JSON) API. Leave `queries = []` to
-    auto-generate dorks from the keywords.
+  - `kind = "search_api"`, `provider = "serper"` with `api_key`,
+    `max_results`, and `queries` — discovers candidates via Serper (real Google
+    results). Leave `queries = []` to auto-generate dorks from the keywords.
+    (`provider = "google_cse"` with `api_key` + `cx` is still supported for
+    anyone who already has a Google Custom Search key.)
 
-## Auto-discovery setup (Google Programmable Search)
+## Auto-discovery setup (Serper)
 
-To use `discover`, create a search engine and an API key (both free tier):
+To use `discover`, get a search API key — the simplest is **Serper**:
 
-1. **Programmable Search Engine** — at <https://programmablesearchengine.google.com/>
-   create an engine set to **search the entire web**. Copy its **Search engine
-   ID** → that's `cx`.
-2. **API key** — at <https://console.cloud.google.com/>, enable the **Custom
-   Search API** for a project and create an API key → that's `api_key`.
-3. Put both in `config.toml` under the `search_api` source, set
-   `queries = []`, and run `dorker discover --config config.toml`.
+1. Sign up at <https://serper.dev> (free credits, no credit card) and copy your
+   **API key** from the dashboard.
+2. Put it in via `dorker setup`, the panel's **Setup** form, or by hand in
+   `config.toml` under the `search_api` source (`provider = "serper"`,
+   `api_key = "…"`, `queries = []`).
+3. Run `dorker discover --config config.toml` (or just `dorker auto`).
 
-Note the free tier allows ~100 search queries/day; each dork query uses one
-(and more as it pages through results), so keep `max_results` modest while
-testing. Nothing about discovery requires Claude — it's the tool calling
-Google's API directly.
+Each dork query spends one search credit, so keep `max_results` modest while
+testing. One key can be shared across a class via the shared config, or each
+person can use their own. Nothing about discovery requires Claude — the tool
+calls the search API directly.
+
+> **Why not Google?** Google closed its Custom Search JSON API to new
+> sign-ups, so new users can't get a Google key. Serper (or another provider)
+> replaces it; existing Google keys still work via `provider = "google_cse"`.
 
 ## Keywords (`keywords.json`)
 

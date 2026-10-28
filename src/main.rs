@@ -361,24 +361,19 @@ fn run_setup(config_path: &Path) -> Result<()> {
         }
     }
 
-    println!("\nAuto-discovery finds scam sites for you using Google search.");
-    println!("It needs a free Google key + search-engine id. Leave the key blank");
-    println!("to skip discovery for now (you can re-run setup later).\n");
+    println!("\nAuto-discovery finds scam sites for you using a search API.");
+    println!("Get a free key at https://serper.dev (free credits, no credit card).");
+    println!("Leave the key blank to skip discovery for now (re-run setup later).\n");
 
-    let api_key = prompt("Google API key (blank to skip)", "");
+    let api_key = prompt("Serper API key (blank to skip)", "");
     let search_api = !api_key.is_empty();
-    let cx = if search_api {
-        prompt("Google search-engine id (cx)", "")
-    } else {
-        String::new()
-    };
 
     println!("\nPoliteness: how long to wait between page requests.");
     let delay = prompt("Delay in milliseconds", "1500");
     let output_dir = prompt("Folder for reports", "out");
 
     let delay_ms: u64 = delay.parse().unwrap_or(1500);
-    config::write_config_file(config_path, &api_key, &cx, delay_ms, &output_dir)?;
+    config::write_config_file(config_path, "serper", &api_key, "", delay_ms, &output_dir)?;
 
     println!("\nSaved {}.", config_path.display());
     if search_api {

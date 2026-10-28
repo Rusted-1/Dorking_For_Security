@@ -31,7 +31,7 @@ cd ~/dorker && ./panel.sh
 ```
 
 ## 5. Use it — all buttons
-- **Setup**: paste your Google key → Save (for auto-discovery; optional).
+- **Setup**: paste your Serper key → Save (for auto-discovery; optional).
 - **Start**: find & scan. Or paste a link into **Scan one site**.
 - Click a result to read its full report.
 - **Stop** / **Quit panel** when done.

@@ -20,30 +20,36 @@ pub async fn gather_candidates(
             cx,
             max_results,
             queries,
-        } => match provider.as_str() {
-            "google_cse" => {
-                // Use configured queries, or auto-build them from the keywords.
-                let auto;
-                let queries: &[String] = if queries.is_empty() {
-                    auto = dorks::build_queries(keywords);
-                    &auto
-                } else {
-                    queries
-                };
-                if queries.is_empty() {
-                    bail!(
-                        "no search queries: set `queries` in the config, or add \
-                         fingerprint keywords so they can be generated automatically"
-                    );
-                }
-                println!("Running {} dork quer(y/ies) via Google Custom Search…", queries.len());
-                google_cse(client, api_key, cx, queries, *max_results).await
+        } => {
+            // Use configured queries, or auto-build them from the keywords.
+            let auto;
+            let q: &[String] = if queries.is_empty() {
+                auto = dorks::build_queries(keywords);
+                &auto
+            } else {
+                queries
+            };
+            if q.is_empty() {
+                bail!(
+                    "no search queries: set `queries` in the config, or add \
+                     fingerprint keywords so they can be generated automatically"
+                );
             }
-            other => bail!(
-                "unknown search provider '{other}'. Supported: google_cse. \
-                 (Add your provider in src/sources.rs.)"
-            ),
-        },
+            match provider.as_str() {
+                "google_cse" => {
+                    println!("Running {} dork quer(y/ies) via Google Custom Search…", q.len());
+                    google_cse(client, api_key, cx, q, *max_results).await
+                }
+                "serper" => {
+                    println!("Running {} dork quer(y/ies) via Serper…", q.len());
+                    serper(client, api_key, q, *max_results).await
+                }
+                other => bail!(
+                    "unknown search provider '{other}'. Supported: serper, google_cse. \
+                     (Add your provider in src/sources.rs.)"
+                ),
+            }
+        }
     }
 }
 
@@ -126,9 +132,77 @@ async fn google_cse(
     Ok(urls)
 }
 
+/// Extract result links from one Serper (google.serper.dev) response body.
+fn parse_serper_items(body: &serde_json::Value) -> Vec<String> {
+    body.get("organic")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|it| it.get("link").and_then(|l| l.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Discover candidates via Serper (real Google results over a simple key).
+///
+/// POST https://google.serper.dev/search with header `X-API-KEY`. One request
+/// per query (num up to 100) to conserve the account's credits. Reaches
+/// google.serper.dev, so the live call is not exercised by offline tests (the
+/// response parsing is).
+async fn serper(
+    client: &reqwest::Client,
+    api_key: &str,
+    queries: &[String],
+    max_results: usize,
+) -> Result<Vec<String>> {
+    if api_key.is_empty() {
+        bail!("serper source needs `api_key` set in the config");
+    }
+    let num = max_results.clamp(10, 100);
+    let mut urls = Vec::new();
+    for query in queries {
+        if urls.len() >= max_results {
+            break;
+        }
+        let resp = client
+            .post("https://google.serper.dev/search")
+            .header("X-API-KEY", api_key)
+            .json(&serde_json::json!({ "q": query, "num": num }))
+            .send()
+            .await
+            .context("calling Serper API")?;
+        if !resp.status().is_success() {
+            bail!("Serper API returned HTTP {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await.context("parsing Serper response")?;
+        urls.extend(parse_serper_items(&body));
+    }
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
+    urls.truncate(max_results);
+    Ok(urls)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_cse_items;
+    use super::{parse_cse_items, parse_serper_items};
+
+    #[test]
+    fn parses_links_from_serper() {
+        let body = serde_json::json!({
+            "organic": [
+                {"title": "A", "link": "https://a.example/"},
+                {"title": "B", "link": "https://b.example/register"},
+                {"title": "no link"}
+            ]
+        });
+        assert_eq!(
+            parse_serper_items(&body),
+            vec!["https://a.example/", "https://b.example/register"]
+        );
+    }
+
 
     #[test]
     fn parses_links_from_items() {

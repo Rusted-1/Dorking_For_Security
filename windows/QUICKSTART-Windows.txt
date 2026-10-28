@@ -11,7 +11,7 @@ No WSL, no install needed. Just this folder.
      (Same reason your antivirus may ask - it's an unsigned new program.)
 
 3. In the panel (your browser):
-   - Setup (optional): paste your Google API key + search-engine id, click Save,
+   - Setup (optional): paste your Serper API key (from serper.dev), click Save,
      to turn on auto-discovery. Leave blank to skip.
    - Start: find & scan.  Or paste one link into "Scan one site".
    - Click any result to open its full colored report.
