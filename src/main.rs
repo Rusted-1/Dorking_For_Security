@@ -12,6 +12,7 @@ mod html;
 mod http;
 mod keywords;
 mod model;
+mod page;
 mod report;
 mod score;
 mod server;
@@ -138,6 +139,10 @@ enum Cmd {
         /// Keep running and poll for new queue items instead of exiting.
         #[arg(long)]
         watch: bool,
+        /// How many different sites to scan at once (each site's own pages
+        /// are still fetched one at a time with the politeness delay).
+        #[arg(long, default_value_t = 4)]
+        parallel: usize,
         /// Stop once this many positive sites have been found (shared across
         /// all instances). Omit for no limit.
         #[arg(long)]
@@ -169,6 +174,9 @@ enum Cmd {
         /// skips sites already scanned.
         #[arg(long, value_name = "MINUTES")]
         every: Option<u64>,
+        /// How many different sites to scan at once.
+        #[arg(long, default_value_t = 4)]
+        parallel: usize,
     },
     /// Review flagged sites. With no host, lists sites awaiting review; with a
     /// host and verdict, records it. Reviewed sites are never re-queued, and
@@ -193,7 +201,7 @@ enum Cmd {
     },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let color = use_color(cli.color);
@@ -280,10 +288,10 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Work { config, max, watch, max_positives, positive_threshold } => {
+        Cmd::Work { config, max, watch, parallel, max_positives, positive_threshold } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("worker needs a coordination directory (don't use --solo)"))?;
-            run_work(&config, max, watch, max_positives, positive_threshold, &coord).await
+            run_work(&config, max, parallel, watch, max_positives, positive_threshold, &coord).await
         }
         Cmd::Status { config } => {
             let c = coordinator(&cli.coordinate, false)
@@ -292,10 +300,11 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Setup { config } => run_setup(&config),
-        Cmd::Auto { config, max, max_positives, positive_threshold, every } => {
+        Cmd::Auto { config, max, max_positives, positive_threshold, every, parallel } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
-            run_auto(&config, max, max_positives, positive_threshold, every, color, &coord).await
+            let run = AutoRun { max, parallel, max_positives, positive_threshold, every };
+            run_auto(&config, &run, color, &coord).await
         }
         Cmd::Review { host, verdict, config, positive_threshold } => {
             run_review(host, verdict, &output_dir_for(&config), positive_threshold, color)
@@ -484,17 +493,24 @@ fn run_setup(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Settings for `dorker auto`.
+struct AutoRun {
+    max: usize,
+    parallel: usize,
+    max_positives: Option<usize>,
+    positive_threshold: u32,
+    every: Option<u64>,
+}
+
 /// One-command pipeline: discover sites and scan them all. With `every`, it
 /// repeats on that interval (minutes) until stopped or the positive cap hits.
 async fn run_auto(
     config_path: &Path,
-    max: usize,
-    max_positives: Option<usize>,
-    positive_threshold: u32,
-    every: Option<u64>,
+    run: &AutoRun,
     color: bool,
     coord: &coord::Coordinator,
 ) -> Result<()> {
+    let AutoRun { max, parallel, max_positives, positive_threshold, every } = *run;
     // Friendly pre-check so a missing key gives guidance, not a raw error.
     let output_dir = match config::load_config(config_path) {
         Ok(cfg) if cfg.source.discovery_ready() => cfg.output_dir,
@@ -534,7 +550,7 @@ async fn run_auto(
             break;
         }
         println!("\nStep 2 of 2 — scanning the queued sites…");
-        run_work(config_path, max, false, max_positives, positive_threshold, coord).await?;
+        run_work(config_path, max, parallel, false, max_positives, positive_threshold, coord).await?;
 
         let waiting = status::awaiting_review(Path::new(&output_dir), positive_threshold);
         println!(
@@ -761,9 +777,11 @@ async fn run_discover(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_work(
     config_path: &Path,
     max: usize,
+    parallel: usize,
     watch: bool,
     max_positives: Option<usize>,
     positive_threshold: u32,
@@ -784,48 +802,67 @@ async fn run_work(
         .unwrap_or_else(|| "out".to_string());
 
     let kws = keywords::load_keywords(Path::new(&keywords_file))?;
-    let matcher = keywords::Matcher::new(kws)?;
+    let matcher = std::sync::Arc::new(keywords::Matcher::new(kws)?);
     if matcher.is_empty() {
         anyhow::bail!("no keywords loaded from {}", keywords_file);
     }
     let client = http::build_client(&fetch)?;
     let st = state::State::open(Path::new(&output_dir));
+    let parallel = parallel.max(1);
 
     let (pending, processing) = coord.queue_counts();
     println!(
-        "Worker started. Queue: {pending} pending, {processing} in progress. Reports → {output_dir}/sites/<host>/"
+        "Worker started ({parallel} site(s) at a time). Queue: {pending} pending, {processing} in progress. Reports → {output_dir}/sites/<host>/"
     );
     if let Some(cap) = max_positives {
         println!("Will stop after {cap} positive(s) (score ≥ {positive_threshold}).");
     }
 
+    // Several different sites are crawled at once; each site's own pages are
+    // still fetched one at a time with the politeness delay.
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut stopping = false;
     let mut done = 0usize;
     loop {
-        if coord.stop_requested() {
-            println!("Stop requested — worker halting.");
-            break;
-        }
-        // Honor the shared positives cap before taking more work.
-        if let Some(cap) = max_positives {
-            if coord.positive_count() >= cap {
-                println!("Positive limit reached ({cap}) — worker halting.");
+        // Top up the in-flight set from the queue.
+        while !stopping && tasks.len() < parallel {
+            if coord.stop_requested() {
+                println!("Stop requested — worker halting.");
+                stopping = true;
                 break;
             }
-        }
-        let url = match coord.take_next() {
-            Some(u) => u,
-            None => {
-                if watch {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                } else {
+            // Honor the shared positives cap before taking more work.
+            if let Some(cap) = max_positives {
+                if coord.positive_count() >= cap {
+                    println!("Positive limit reached ({cap}) — worker halting.");
+                    stopping = true;
                     break;
                 }
             }
-        };
+            let Some(url) = coord.take_next() else { break };
+            println!("→ taking {url}");
+            let (m, cl, f, co) = (matcher.clone(), client.clone(), fetch.clone(), coord.clone());
+            tasks.spawn(async move {
+                let outcome = crawl::crawl(&url, &m, &cl, &f, max, Some(&co)).await;
+                (url, outcome)
+            });
+        }
+        if tasks.is_empty() {
+            if stopping || !watch {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            continue;
+        }
 
-        println!("→ taking {url}");
-        let outcome = crawl::crawl(&url, &matcher, &client, &fetch, max, Some(coord)).await;
+        let (url, outcome) = match tasks.join_next().await {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => {
+                eprintln!("  a site scan failed: {e}");
+                continue;
+            }
+            None => continue,
+        };
         if let Some(host) = &outcome.skipped_site {
             println!("  (site '{host}' already handled by another instance; skipping)");
             coord.complete(&url);
@@ -837,7 +874,7 @@ async fn run_work(
         report::write_report(&report, &site_dir)?;
         report::write_links(&url, &outcome.internal, &outcome.external, &site_dir)?;
         println!(
-            "  {} → {}",
+            "✓ {url}: {} → {}",
             report::console_summary(&report),
             site_dir.display()
         );
@@ -860,10 +897,12 @@ async fn run_work(
                 let count = coord.record_positive(&host);
                 println!("  positive #{count} ({top}/100)");
                 if let Some(cap) = max_positives {
-                    if count >= cap {
+                    if count >= cap && !stopping {
+                        // In-flight scans see the signal and wrap up their
+                        // partial reports, which are still written below.
                         println!("Positive limit reached ({cap}) — signaling all instances to stop.");
                         let _ = coord.request_stop();
-                        break;
+                        stopping = true;
                     }
                 }
             }
@@ -905,9 +944,8 @@ async fn run_check(
         _ => anyhow::bail!("pass exactly one of --url or --file"),
     };
 
-    let text = verify::extract_text(&html);
-    let hits = matcher.find(&url_for_match, &text);
-    let exclusions = matcher.exclusions(&url_for_match, &text);
+    let text = page::parse(&html).text;
+    let (hits, exclusions) = matcher.scan(&url_for_match, &text);
 
     println!("Checked: {label}");
     if !exclusions.is_empty() {

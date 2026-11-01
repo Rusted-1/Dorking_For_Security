@@ -6,11 +6,10 @@
 
 use crate::config::FetchConfig;
 use crate::coord::Coordinator;
-use crate::http::robots_allows;
+use crate::http::{fetch_page, looks_like_page, RobotsCache};
 use crate::keywords::Matcher;
 use crate::model::SiteResult;
-use crate::verify::extract_text;
-use scraper::{Html, Selector};
+use crate::page;
 use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 use url::Url;
@@ -92,6 +91,7 @@ pub async fn crawl(
     let mut results: Vec<SiteResult> = Vec::new();
     let mut internal: HashSet<String> = HashSet::new();
     let mut external: HashSet<String> = HashSet::new();
+    let mut robots = RobotsCache::default();
 
     while let Some((url, depth)) = queue.pop_front() {
         if results.len() >= max_pages {
@@ -114,7 +114,7 @@ pub async fn crawl(
             tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;
         }
 
-        if cfg.respect_robots && !robots_allows(client, &url, &cfg.user_agent).await {
+        if cfg.respect_robots && !robots.allows(client, &url, &cfg.user_agent).await {
             results.push(SiteResult {
                 url: url.to_string(),
                 fetched: false,
@@ -128,57 +128,42 @@ pub async fn crawl(
             continue;
         }
 
-        match client.get(url.clone()).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                match resp.text().await {
-                    Ok(body) => {
-                        let text = extract_text(&body);
-                        let hits = matcher.find(url.as_str(), &text);
-                        let exclusions = matcher.exclusions(url.as_str(), &text);
-                        eprintln!("  scanned ({}/{}) {}", results.len() + 1, max_pages, url);
-                        results.push(SiteResult {
-                            url: url.to_string(),
-                            fetched: true,
-                            status: Some(status),
-                            error: None,
-                            score: 0, // filled in by report::build_report
-                            excluded: !exclusions.is_empty(),
-                            exclusions,
-                            hits,
-                        });
+        match fetch_page(client, url.clone()).await {
+            Ok((status, body)) => {
+                let page = page::parse(&body);
+                drop(body);
+                let (hits, exclusions) = matcher.scan(url.as_str(), &page.text);
+                eprintln!("  scanned ({}/{}) {}", results.len() + 1, max_pages, url);
+                results.push(SiteResult {
+                    url: url.to_string(),
+                    fetched: true,
+                    status: Some(status),
+                    error: None,
+                    score: 0, // filled in by report::build_report
+                    excluded: !exclusions.is_empty(),
+                    exclusions,
+                    hits,
+                });
 
-                        // Inventory every link on this page, and (only from
-                        // the start page) queue same-site links to scan next.
-                        for link in extract_links(&body, &url) {
-                            let is_internal = norm_host(&link) == seed_host;
-                            if is_internal {
-                                internal.insert(key(&link));
-                            } else {
-                                external.insert(key(&link));
-                            }
-                            if depth == 0 && is_internal && seen.insert(key(&link)) {
-                                queue.push_back((link, 1));
-                            }
-                        }
+                // Inventory every link on this page, and (only from the start
+                // page) queue same-site page links to scan next.
+                for link in resolve_links(&page.links, &url) {
+                    let is_internal = norm_host(&link) == seed_host;
+                    if is_internal {
+                        internal.insert(key(&link));
+                    } else {
+                        external.insert(key(&link));
                     }
-                    Err(e) => results.push(SiteResult {
-                        url: url.to_string(),
-                        fetched: false,
-                        status: Some(status),
-                        error: Some(format!("reading body: {e}")),
-                        score: 0,
-                        excluded: false,
-                        exclusions: vec![],
-                        hits: vec![],
-                    }),
+                    if depth == 0 && is_internal && looks_like_page(&link) && seen.insert(key(&link)) {
+                        queue.push_back((link, 1));
+                    }
                 }
             }
-            Err(e) => results.push(SiteResult {
+            Err((status, error)) => results.push(SiteResult {
                 url: url.to_string(),
                 fetched: false,
-                status: None,
-                error: Some(format!("request failed: {e}")),
+                status,
+                error: Some(error),
                 score: 0,
                 excluded: false,
                 exclusions: vec![],
@@ -200,23 +185,15 @@ pub async fn crawl(
     }
 }
 
-/// Pull absolute http(s) links from a page, resolved against its URL.
-fn extract_links(html: &str, base: &Url) -> Vec<Url> {
-    let doc = Html::parse_document(html);
-    let sel = match Selector::parse("a[href]") {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-    let mut out = Vec::new();
-    for el in doc.select(&sel) {
-        if let Some(href) = el.value().attr("href") {
-            if let Ok(mut u) = base.join(href) {
-                if u.scheme() == "http" || u.scheme() == "https" {
-                    u.set_fragment(None);
-                    out.push(u);
-                }
-            }
-        }
-    }
-    out
+/// Resolve a page's hrefs against its URL, keeping absolute http(s) links.
+fn resolve_links(hrefs: &[String], base: &Url) -> Vec<Url> {
+    hrefs
+        .iter()
+        .filter_map(|href| base.join(href).ok())
+        .filter(|u| u.scheme() == "http" || u.scheme() == "https")
+        .map(|mut u| {
+            u.set_fragment(None);
+            u
+        })
+        .collect()
 }

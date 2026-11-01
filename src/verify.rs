@@ -2,10 +2,10 @@
 
 use crate::config::FetchConfig;
 use crate::coord::{self, Coordinator};
-use crate::http::robots_allows;
+use crate::http::{fetch_page, RobotsCache};
 use crate::keywords::Matcher;
 use crate::model::SiteResult;
-use scraper::Html;
+use crate::page;
 use std::collections::HashSet;
 use std::time::Duration;
 use url::Url;
@@ -20,6 +20,7 @@ pub async fn verify_sites(
 ) -> Vec<SiteResult> {
     let mut results = Vec::with_capacity(urls.len());
     let mut scanned = 0usize;
+    let mut robots = RobotsCache::default();
     // Hosts this instance owns, so later URLs on the same site aren't skipped.
     let mut owned_hosts: HashSet<String> = HashSet::new();
     for raw_url in urls {
@@ -46,7 +47,7 @@ pub async fn verify_sites(
         if scanned > 0 && cfg.delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;
         }
-        results.push(verify_one(raw_url, matcher, client, cfg).await);
+        results.push(verify_one(raw_url, matcher, client, cfg, &mut robots).await);
         scanned += 1;
     }
     results
@@ -70,44 +71,32 @@ async fn verify_one(
     matcher: &Matcher,
     client: &reqwest::Client,
     cfg: &FetchConfig,
+    robots: &mut RobotsCache,
 ) -> SiteResult {
     let parsed = match Url::parse(raw_url) {
         Ok(u) => u,
         Err(e) => return failure(raw_url, None, format!("invalid url: {e}")),
     };
 
-    if cfg.respect_robots && !robots_allows(client, &parsed, &cfg.user_agent).await {
+    if cfg.respect_robots && !robots.allows(client, &parsed, &cfg.user_agent).await {
         return failure(raw_url, None, "skipped: disallowed by robots.txt".to_string());
     }
 
-    match client.get(parsed).send().await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            match resp.text().await {
-                Ok(body) => {
-                    let text = extract_text(&body);
-                    let hits = matcher.find(raw_url, &text);
-                    let exclusions = matcher.exclusions(raw_url, &text);
-                    SiteResult {
-                        url: raw_url.to_string(),
-                        fetched: true,
-                        status: Some(status),
-                        error: None,
-                        score: 0, // filled in by report::build_report
-                        excluded: !exclusions.is_empty(),
-                        exclusions,
-                        hits,
-                    }
-                }
-                Err(e) => failure(raw_url, Some(status), format!("reading body: {e}")),
+    match fetch_page(client, parsed).await {
+        Ok((status, body)) => {
+            let text = page::parse(&body).text;
+            let (hits, exclusions) = matcher.scan(raw_url, &text);
+            SiteResult {
+                url: raw_url.to_string(),
+                fetched: true,
+                status: Some(status),
+                error: None,
+                score: 0, // filled in by report::build_report
+                excluded: !exclusions.is_empty(),
+                exclusions,
+                hits,
             }
         }
-        Err(e) => failure(raw_url, None, format!("request failed: {e}")),
+        Err((status, error)) => failure(raw_url, status, error),
     }
-}
-
-/// Extract visible text from an HTML document (also works on plain text).
-pub fn extract_text(html: &str) -> String {
-    let doc = Html::parse_document(html);
-    doc.root_element().text().collect::<Vec<_>>().join(" ")
 }

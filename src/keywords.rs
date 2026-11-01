@@ -2,8 +2,10 @@
 
 use crate::model::{Keyword, KeywordFile, KeywordHit, Target};
 use crate::score;
+use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result};
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Load keywords from a JSON data file.
@@ -17,32 +19,45 @@ pub fn load_keywords(path: &Path) -> Result<Vec<Keyword>> {
 
 struct Compiled {
     kw: Keyword,
+    /// Regex for regex / whole-word keywords; None for plain phrases, which
+    /// are matched by the shared automaton instead.
     re: Option<Regex>,
-    lower_phrase: String,
     weight: u32,
     is_exclude: bool,
 }
 
+/// First match position of each plain keyword (by index) in one haystack.
+type PlainHits = HashMap<usize, usize>;
+
 impl Compiled {
-    /// Does this keyword appear in `haystack`? `lower_haystack` is the
-    /// lowercased form, used for the fast substring path.
-    fn matches(&self, haystack: &str, lower_haystack: &str) -> Option<usize> {
+    /// Where this keyword (index `i`) first appears in `haystack`, if at all.
+    fn matches(&self, i: usize, haystack: &str, plain: &PlainHits) -> Option<usize> {
         match &self.re {
             Some(re) => re.find(haystack).map(|m| m.start()),
-            None => lower_haystack.find(&self.lower_phrase),
+            None => plain.get(&i).copied(),
         }
     }
 }
 
 /// Matches content and URLs against a set of keywords.
+///
+/// Plain phrases (the vast majority) go into one Aho-Corasick automaton, so a
+/// page is scanned once for all of them instead of once per keyword.
 pub struct Matcher {
     keywords: Vec<Compiled>,
+    /// Automaton over the distinct lowercased plain phrases.
+    plain: Option<AhoCorasick>,
+    /// For each automaton pattern, the indexes of keywords using that phrase.
+    owners: Vec<Vec<usize>>,
 }
 
 impl Matcher {
     pub fn new(keywords: Vec<Keyword>) -> Result<Self> {
         let mut compiled = Vec::with_capacity(keywords.len());
-        for kw in keywords {
+        let mut patterns: Vec<String> = Vec::new();
+        let mut owners: Vec<Vec<usize>> = Vec::new();
+        let mut pattern_of: HashMap<String, usize> = HashMap::new();
+        for (idx, kw) in keywords.into_iter().enumerate() {
             let re = if kw.regex {
                 Some(
                     Regex::new(&kw.phrase)
@@ -55,9 +70,15 @@ impl Matcher {
                         .with_context(|| format!("building whole-word regex for '{}'", kw.id))?,
                 )
             } else {
+                let lower = kw.phrase.to_lowercase();
+                let p = *pattern_of.entry(lower.clone()).or_insert_with(|| {
+                    patterns.push(lower);
+                    owners.push(Vec::new());
+                    patterns.len() - 1
+                });
+                owners[p].push(idx);
                 None
             };
-            let lower_phrase = kw.phrase.to_lowercase();
             let weight = kw
                 .weight
                 .unwrap_or_else(|| score::default_weight(kw.category.as_deref()));
@@ -65,12 +86,35 @@ impl Matcher {
             compiled.push(Compiled {
                 kw,
                 re,
-                lower_phrase,
                 weight,
                 is_exclude,
             });
         }
-        Ok(Self { keywords: compiled })
+        let plain = if patterns.is_empty() {
+            None
+        } else {
+            Some(AhoCorasick::new(&patterns).context("building the keyword matcher")?)
+        };
+        Ok(Self {
+            keywords: compiled,
+            plain,
+            owners,
+        })
+    }
+
+    /// First match position of every plain keyword in a lowercased haystack.
+    fn plain_hits(&self, lower: &str) -> PlainHits {
+        let mut first = PlainHits::new();
+        if let Some(ac) = &self.plain {
+            // Overlapping search reports every pattern; for any one pattern
+            // the first report is its leftmost occurrence.
+            for m in ac.find_overlapping_iter(lower) {
+                for &k in &self.owners[m.pattern().as_usize()] {
+                    first.entry(k).or_insert(m.start());
+                }
+            }
+        }
+        first
     }
 
     pub fn len(&self) -> usize {
@@ -98,38 +142,27 @@ impl Matcher {
         (content, url, exclude)
     }
 
-    /// Return the exclusion terms that appear in the content or the URL.
-    /// A non-empty result means the page should be treated as legitimate.
-    pub fn exclusions(&self, url: &str, text: &str) -> Vec<String> {
-        let lower_text = text.to_lowercase();
-        let lower_url = url.to_lowercase();
-        let mut out = Vec::new();
-        for c in &self.keywords {
-            if !c.is_exclude {
-                continue;
-            }
-            if c.matches(text, &lower_text).is_some() || c.matches(url, &lower_url).is_some() {
-                out.push(c.kw.phrase.clone());
-            }
-        }
-        out
-    }
-
-    /// Find every keyword hit, checking content keywords against `text` and
-    /// URL keywords against `url`.
-    pub fn find(&self, url: &str, text: &str) -> Vec<KeywordHit> {
-        let lower_text = text.to_lowercase();
-        let lower_url = url.to_lowercase();
+    /// Check one page in a single pass. Returns the keyword hits (content
+    /// keywords against `text`, URL keywords against `url`) and the exclusion
+    /// terms found in either; any exclusion means the page is treated as
+    /// legitimate.
+    pub fn scan(&self, url: &str, text: &str) -> (Vec<KeywordHit>, Vec<String>) {
+        let in_text = self.plain_hits(&text.to_lowercase());
+        let in_url = self.plain_hits(&url.to_lowercase());
         let mut hits = Vec::new();
-        for c in &self.keywords {
+        let mut exclusions = Vec::new();
+        for (i, c) in self.keywords.iter().enumerate() {
             if c.is_exclude {
+                if c.matches(i, text, &in_text).is_some() || c.matches(i, url, &in_url).is_some() {
+                    exclusions.push(c.kw.phrase.clone());
+                }
                 continue;
             }
-            let (haystack, lower_haystack) = match c.kw.target {
-                Target::Content => (text, &lower_text),
-                Target::Url => (url, &lower_url),
+            let (haystack, plain) = match c.kw.target {
+                Target::Content => (text, &in_text),
+                Target::Url => (url, &in_url),
             };
-            if let Some(start) = c.matches(haystack, lower_haystack) {
+            if let Some(start) = c.matches(i, haystack, plain) {
                 hits.push(KeywordHit {
                     keyword_id: c.kw.id.clone(),
                     category: c.kw.category.clone(),
@@ -139,7 +172,17 @@ impl Matcher {
                 });
             }
         }
-        hits
+        (hits, exclusions)
+    }
+
+    #[cfg(test)]
+    fn find(&self, url: &str, text: &str) -> Vec<KeywordHit> {
+        self.scan(url, text).0
+    }
+
+    #[cfg(test)]
+    fn exclusions(&self, url: &str, text: &str) -> Vec<String> {
+        self.scan(url, text).1
     }
 }
 
@@ -245,6 +288,24 @@ mod tests {
     fn no_false_positive() {
         let m = Matcher::new(vec![kw("giftcard", "pay with gift cards", false, Target::Content)]).unwrap();
         assert!(m.find("http://x/", "A normal page about nothing.").is_empty());
+    }
+
+    #[test]
+    fn shared_and_overlapping_phrases_all_match() {
+        let m = Matcher::new(vec![
+            kw("a", "Investment Platform", false, Target::Content),
+            kw("b", "investment platform", false, Target::Content), // same phrase, other id
+            kw("c", "Platform", false, Target::Content),             // inside another phrase
+            kw("d", "nowhere", false, Target::Content),
+        ])
+        .unwrap();
+        let mut ids: Vec<String> = m
+            .find("http://x/", "Our INVESTMENT PLATFORM pays daily")
+            .into_iter()
+            .map(|h| h.keyword_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["a", "b", "c"]);
     }
 
     #[test]

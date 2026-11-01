@@ -8,9 +8,10 @@ use std::path::Path;
 /// key never has to be written into a file at all.
 pub const SERPER_KEY_ENV: &str = "SERPER_API_KEY";
 
-/// Quote a string as a TOML basic string (escapes quotes and backslashes).
+/// Quote a string as a TOML basic string. JSON string escapes are a subset of
+/// TOML's, so serde_json does it without pulling in a TOML writer.
 fn toml_str(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Write a config.toml. A non-empty `api_key` produces a search_api (auto

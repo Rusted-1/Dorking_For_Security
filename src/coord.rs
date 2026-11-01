@@ -21,6 +21,7 @@ use url::Url;
 /// block a site forever.
 const CLAIM_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
+#[derive(Clone)]
 pub struct Coordinator {
     dir: PathBuf,
 }

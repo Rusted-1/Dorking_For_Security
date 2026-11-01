@@ -230,11 +230,12 @@ fn status_json(coord: &Coordinator, output_dir: &str, config_path: &str, jobs: u
     let configured = crate::config::load_config(Path::new(config_path))
         .map(|c| c.source.discovery_ready())
         .unwrap_or(false);
-    let out = Path::new(output_dir);
-    let awaiting = status::awaiting_review(out, 50).len();
-    let hits = status::top_hits(out, 25);
+    // One read of the reports serves both the counter and the list.
+    let hits = status::top_hits(Path::new(output_dir), usize::MAX);
+    let awaiting = hits.iter().filter(|h| h.score >= 50 && h.review.is_none()).count();
     let hits_json: Vec<serde_json::Value> = hits
         .iter()
+        .take(25)
         .map(|h| {
             let report = format!("/reports/sites/{}/report.html", crate::coord::safe_host(&h.url));
             serde_json::json!({
