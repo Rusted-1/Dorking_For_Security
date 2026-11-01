@@ -16,6 +16,7 @@ mod report;
 mod score;
 mod server;
 mod sources;
+mod state;
 mod status;
 mod verify;
 
@@ -99,8 +100,9 @@ enum Cmd {
     Sites,
     /// Clear coordination state: all site/URL claims and any stop signal.
     Reset,
-    /// Auto-discover candidate sites via Google search dorks (needs a
-    /// search_api source in the config). Writes out/discovered.txt.
+    /// Auto-discover candidate sites via search dorks through Serper (needs a
+    /// search_api source in the config, or SERPER_API_KEY set). Writes
+    /// out/discovered.txt.
     Discover {
         #[arg(long, default_value = "config.toml")]
         config: PathBuf,
@@ -160,6 +162,25 @@ enum Cmd {
         #[arg(long)]
         max_positives: Option<usize>,
         /// A site counts as a positive when its top score is at least this.
+        #[arg(long, default_value_t = 50)]
+        positive_threshold: u32,
+        /// Keep going: repeat discover + scan every N minutes until stopped
+        /// (or the positive limit is hit). Each round uses fresh queries and
+        /// skips sites already scanned.
+        #[arg(long, value_name = "MINUTES")]
+        every: Option<u64>,
+    },
+    /// Review flagged sites. With no host, lists sites awaiting review; with a
+    /// host and verdict, records it. Reviewed sites are never re-queued, and
+    /// false positives drop out of the hit lists.
+    Review {
+        /// Site to review (a host like scam.example, or any URL on it).
+        host: Option<String>,
+        /// confirmed | false_positive | clear
+        verdict: Option<String>,
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        /// Minimum score for a site to need review.
         #[arg(long, default_value_t = 50)]
         positive_threshold: u32,
     },
@@ -267,29 +288,94 @@ async fn main() -> Result<()> {
         Cmd::Status { config } => {
             let c = coordinator(&cli.coordinate, false)
                 .ok_or_else(|| anyhow::anyhow!("could not open coordination directory"))?;
-            let output_dir = config::load_config(&config)
-                .ok()
-                .map(|cfg| cfg.output_dir)
-                .unwrap_or_else(|| "out".to_string());
-            run_status(&c, &output_dir, color);
+            run_status(&c, &output_dir_for(&config), color);
             Ok(())
         }
         Cmd::Setup { config } => run_setup(&config),
-        Cmd::Auto { config, max, max_positives, positive_threshold } => {
+        Cmd::Auto { config, max, max_positives, positive_threshold, every } => {
             let coord = coordinator(&cli.coordinate, cli.solo)
                 .ok_or_else(|| anyhow::anyhow!("auto needs a coordination directory (don't use --solo)"))?;
-            run_auto(&config, max, max_positives, positive_threshold, color, &coord).await
+            run_auto(&config, max, max_positives, positive_threshold, every, color, &coord).await
+        }
+        Cmd::Review { host, verdict, config, positive_threshold } => {
+            run_review(host, verdict, &output_dir_for(&config), positive_threshold, color)
         }
         Cmd::Serve { config, port } => {
             let coord = coordinator(&cli.coordinate, false)
                 .ok_or_else(|| anyhow::anyhow!("the panel needs a coordination directory (don't use --solo)"))?;
-            let output_dir = config::load_config(&config)
-                .ok()
-                .map(|cfg| cfg.output_dir)
-                .unwrap_or_else(|| "out".to_string());
-            server::run_serve(port, &config, &output_dir, &coord)
+            server::run_serve(port, &config, &output_dir_for(&config), &coord)
         }
     }
+}
+
+/// The output directory a config names, or "out" without a usable config.
+fn output_dir_for(config_path: &Path) -> String {
+    config::load_config(config_path)
+        .ok()
+        .map(|cfg| cfg.output_dir)
+        .unwrap_or_else(|| "out".to_string())
+}
+
+/// Normalize what a person typed (a host or a URL) to a site key.
+fn site_key(input: &str) -> String {
+    let t = input.trim();
+    if t.contains("://") {
+        if let Some(h) = coord::host_key(t) {
+            return h;
+        }
+    }
+    let t = t.trim_end_matches('/').to_lowercase();
+    t.strip_prefix("www.").unwrap_or(&t).to_string()
+}
+
+/// `dorker review`: list sites awaiting review, or record a verdict.
+fn run_review(
+    host: Option<String>,
+    verdict: Option<String>,
+    output_dir: &str,
+    threshold: u32,
+    color: bool,
+) -> Result<()> {
+    let out = Path::new(output_dir);
+    let st = state::State::open(out);
+    let Some(host) = host else {
+        let waiting = status::awaiting_review(out, threshold);
+        if waiting.is_empty() {
+            println!("Nothing awaiting review (score ≥ {threshold}) in {output_dir}/.");
+        } else {
+            println!("Awaiting review ({}):", waiting.len());
+            for h in &waiting {
+                println!("  {}  {}", score::tag(h.score, color), h.host);
+                println!(
+                    "      report: {output_dir}/sites/{}/report.html",
+                    coord::safe_host(&h.url)
+                );
+            }
+            println!("\nRecord a verdict:  dorker review <host> confirmed|false_positive");
+        }
+        let reviewed = st.reviews();
+        if !reviewed.is_empty() {
+            println!("\nAlready reviewed ({}):", reviewed.len());
+            for (h, v) in reviewed {
+                println!("  {:<15} {h}", v.as_str());
+            }
+        }
+        return Ok(());
+    };
+
+    let key = site_key(&host);
+    let verdict = verdict.unwrap_or_default();
+    if verdict == "clear" {
+        st.set_review(&key, None)?;
+        println!("Cleared the review for {key}.");
+        return Ok(());
+    }
+    let v = state::Verdict::parse(&verdict).ok_or_else(|| {
+        anyhow::anyhow!("give a verdict: confirmed, false_positive, or clear")
+    })?;
+    st.set_review(&key, Some(v))?;
+    println!("Marked {key} as {}.", v.as_str());
+    Ok(())
 }
 
 /// Print a one-glance status: queue, positives, claimed sites, top hits.
@@ -307,13 +393,20 @@ fn run_status(coord: &coord::Coordinator, output_dir: &str, color: bool) {
     println!("  Positives:      {} flagged", positives.len());
     println!("  Sites claimed:  {}", sites.len());
 
+    let waiting = status::awaiting_review(Path::new(output_dir), 50);
+    println!("  Awaiting review: {} (see `dorker review`)", waiting.len());
+
     let hits = status::top_hits(Path::new(output_dir), 10);
-    println!("\n  Top hits (from reports in {output_dir}/):");
+    println!("\n  Top hits (from reports in {output_dir}/, false positives hidden):");
     if hits.is_empty() {
         println!("    (none yet)");
     } else {
         for h in &hits {
-            println!("    {}  {}", score::tag(h.score, color), h.url);
+            let mark = match h.review {
+                Some(state::Verdict::Confirmed) => "  [confirmed]",
+                _ => "",
+            };
+            println!("    {}  {}{mark}", score::tag(h.score, color), h.url);
         }
     }
 
@@ -363,6 +456,10 @@ fn run_setup(config_path: &Path) -> Result<()> {
 
     println!("\nAuto-discovery finds scam sites for you using a search API.");
     println!("Get a free key at https://serper.dev (free credits, no credit card).");
+    println!(
+        "Tip: instead of saving the key here you can set the {} environment variable.",
+        config::SERPER_KEY_ENV
+    );
     println!("Leave the key blank to skip discovery for now (re-run setup later).\n");
 
     let api_key = prompt("Serper API key (blank to skip)", "");
@@ -382,40 +479,91 @@ fn run_setup(config_path: &Path) -> Result<()> {
         println!("No discovery key set. You can:");
         println!("  • scan one site:   dorker scan --url https://suspect-site.com/");
         println!("  • or add URLs to candidates.txt and run:  dorker scan --config {}", config_path.display());
-        println!("Re-run `dorker setup` any time to add a Google key for auto-discovery.");
+        println!("Re-run `dorker setup` any time to add a Serper key for auto-discovery.");
     }
     Ok(())
 }
 
-/// One-command pipeline: discover sites and scan them all.
+/// One-command pipeline: discover sites and scan them all. With `every`, it
+/// repeats on that interval (minutes) until stopped or the positive cap hits.
 async fn run_auto(
     config_path: &Path,
     max: usize,
     max_positives: Option<usize>,
     positive_threshold: u32,
+    every: Option<u64>,
     color: bool,
     coord: &coord::Coordinator,
 ) -> Result<()> {
     // Friendly pre-check so a missing key gives guidance, not a raw error.
-    match config::load_config(config_path) {
-        Ok(cfg) if matches!(cfg.source, config::SourceConfig::SearchApi { .. }) => {}
+    let output_dir = match config::load_config(config_path) {
+        Ok(cfg) if cfg.source.discovery_ready() => cfg.output_dir,
         Ok(_) => anyhow::bail!(
-            "auto mode discovers sites via search, but {} isn't set up for it.\n\
-             Run `dorker setup` and add your Google key, or scan one site with \
+            "auto mode discovers sites via search, but {} has no Serper key.\n\
+             Run `dorker setup` (or set {}), or scan one site with \
              `dorker scan --url https://…`.",
-            config_path.display()
+            config_path.display(),
+            config::SERPER_KEY_ENV
         ),
         Err(_) => anyhow::bail!(
-            "no config found at {}. Run `dorker setup` first.",
-            config_path.display()
+            "no config found at {}. Run `dorker setup` first, or set {}.",
+            config_path.display(),
+            config::SERPER_KEY_ENV
         ),
-    }
+    };
 
-    println!("Step 1 of 2 — discovering candidate sites…");
-    run_discover(config_path, false, true, color, Some(coord)).await?;
-    println!("\nStep 2 of 2 — scanning the queued sites…");
-    run_work(config_path, max, false, max_positives, positive_threshold, coord).await?;
-    println!("\nAll done. Open the reports in your browser — see out/sites/<host>/report.html");
+    coord.clear_stop();
+    let mut round = 1usize;
+    loop {
+        if every.is_some() {
+            println!(
+                "\n=== Round {round} — {} ===",
+                chrono::Local::now().format("%Y-%m-%d %H:%M")
+            );
+        }
+        println!("Step 1 of 2 — discovering candidate sites…");
+        if let Err(e) = run_discover(config_path, false, true, color, Some(coord)).await {
+            // One failed round shouldn't end an unattended run.
+            if every.is_none() {
+                return Err(e);
+            }
+            eprintln!("Discovery failed this round: {e:#}");
+        }
+        if coord.stop_requested() {
+            println!("Stop requested — ending the run.");
+            break;
+        }
+        println!("\nStep 2 of 2 — scanning the queued sites…");
+        run_work(config_path, max, false, max_positives, positive_threshold, coord).await?;
+
+        let waiting = status::awaiting_review(Path::new(&output_dir), positive_threshold);
+        println!(
+            "\n{} site(s) awaiting review — run `dorker review` or use the panel.",
+            waiting.len()
+        );
+
+        let Some(minutes) = every.map(|m| m.max(1)) else { break };
+        if coord.stop_requested() {
+            println!("Stop requested — ending the continuous run.");
+            break;
+        }
+        if max_positives.is_some_and(|cap| coord.positive_count() >= cap) {
+            println!("Positive limit reached — ending the continuous run.");
+            break;
+        }
+        println!("Round {round} done. Next round in {minutes} min (`dorker stop` ends it).");
+        // Sleep in short slices so a stop signal is noticed promptly.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(minutes * 60);
+        while std::time::Instant::now() < deadline && !coord.stop_requested() {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        if coord.stop_requested() {
+            println!("Stop requested — ending the continuous run.");
+            break;
+        }
+        round += 1;
+    }
+    println!("\nAll done. Open the reports in your browser — see {output_dir}/sites/<host>/report.html");
     Ok(())
 }
 
@@ -490,7 +638,8 @@ async fn run_scan(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no config file found and no --url given"))?;
         println!("Gathering candidates…");
-        let candidates = sources::gather_candidates(&cfg.source, &client, &kws).await?;
+        let st = state::State::open(&out_dir);
+        let candidates = sources::gather_candidates(&cfg.source, &client, &kws, Some(&st)).await?;
         println!("Found {} candidate URL(s).", candidates.len());
         results = verify::verify_sites(&candidates, &matcher, &client, &fetch, coord).await;
     }
@@ -551,7 +700,8 @@ async fn run_discover(
         .with_context(|| format!("creating output dir {}", out_dir.display()))?;
 
     println!("Discovering candidate sites…");
-    let candidates = sources::gather_candidates(&cfg.source, &client, &kws).await?;
+    let st = state::State::open(&out_dir);
+    let candidates = sources::gather_candidates(&cfg.source, &client, &kws, Some(&st)).await?;
 
     let list_path = out_dir.join("discovered.txt");
     let body: String = candidates
@@ -639,6 +789,7 @@ async fn run_work(
         anyhow::bail!("no keywords loaded from {}", keywords_file);
     }
     let client = http::build_client(&fetch)?;
+    let st = state::State::open(Path::new(&output_dir));
 
     let (pending, processing) = coord.queue_counts();
     println!(
@@ -691,6 +842,9 @@ async fn run_work(
             site_dir.display()
         );
         coord.complete(&url);
+        if let Some(host) = coord::host_key(&url) {
+            st.mark_seen(&host);
+        }
         done += 1;
 
         // Count a positive and enforce the shared cap.

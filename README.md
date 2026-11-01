@@ -93,9 +93,27 @@ has buttons for everything, so a user never touches the terminal: a one-time
 **Start / Stop** pair, Discover, Start a worker, Reset, **Quit panel**, a
 **"scan one site"** box, an add-to-queue box, and a "stop after N positives"
 field. Top hits are clickable — each opens that site's full colored report.
-On WSL, open it in your Windows browser with
+The panel only accepts requests from its own page (it checks the Host header
+and requires a panel-only header on every action), so other websites open in
+your browser can't trigger scans or overwrite your key. On WSL, open it in your Windows browser with
 `explorer.exe http://localhost:8787`, or double-click the included
 `Dorker-Panel.bat`.
+
+**Hands-off mode.** To let it keep running on its own, repeat discovery and
+scanning on a schedule, and check in only to review what it flagged:
+
+```
+dorker auto --every 360 --max-positives 25   # a new round every 6 hours
+dorker review                                 # list sites awaiting review
+dorker review scam-site.com confirmed         # or: false_positive / clear
+```
+
+Each round spends a capped number of Serper credits on the queries that ran
+longest ago, skips sites it already scanned or you already reviewed, and stops
+when you hit `dorker stop`, press **Stop** in the panel, or reach the positive
+limit. In the panel, fill in **Repeat every N minutes** before pressing Start.
+The **Top hits** list has **✓ Confirm** / **✗ False positive** buttons, and an
+**Activity log** shows what background jobs are doing.
 
 `setup` walks you through it in plain questions (including pasting your Serper
 key, if you want auto-discovery) and writes the config for you — no hand-editing
@@ -264,6 +282,15 @@ copy it to `config.toml` if you want to edit by hand instead of using setup.
   - `kind = "search_api"`, `provider = "serper"` with `api_key`,
     `max_results`, and `queries` — discovers candidates via Serper (real Google
     results). Leave `queries = []` to auto-generate dorks from the keywords.
+    Optional tuning (defaults shown):
+    - `results_per_query = 10` — results per search (10 is cheapest).
+    - `max_queries_per_run = 25` — credit budget per run. Queries rotate,
+      least-recently-run first, so repeated runs cover the whole list.
+    - `rescan_after_days = 30` — skip sites scanned more recently than this
+      (0 = always re-scan).
+    - `skip_domains = []` — extra domains never to queue. A built-in list
+      already skips big legitimate and scam-reporting sites (wikipedia.org,
+      reddit.com, trustpilot.com, real exchanges, `.gov`, `.edu`, …).
     (`provider = "google_cse"` with `api_key` + `cx` is still supported for
     anyone who already has a Google Custom Search key.)
 
@@ -278,8 +305,17 @@ To use `discover`, get a search API key — the simplest is **Serper**:
    `api_key = "…"`, `queries = []`).
 3. Run `dorker discover --config config.toml` (or just `dorker auto`).
 
-Each dork query spends one search credit, so keep `max_results` modest while
-testing. One key can be shared across a class via the shared config, or each
+**No config file at all:** set the `SERPER_API_KEY` environment variable and
+`dorker auto` runs with default settings. When the variable is set, it also
+overrides the key in a Serper `config.toml`, so the key never has to be saved
+in a file.
+
+Each dork query spends one search credit. `max_queries_per_run` caps the
+spend per run, discovery stops early once `max_results` new sites are found,
+and a query that fails (rate limit, server error) is retried with backoff,
+then skipped without losing the results found so far. Run memory (queries
+already run, sites already scanned, your reviews) lives in `out/state/`;
+delete that folder to start fresh. One key can be shared across a class via the shared config, or each
 person can use their own. Nothing about discovery requires Claude — the tool
 calls the search API directly.
 

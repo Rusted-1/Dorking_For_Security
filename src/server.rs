@@ -6,11 +6,21 @@
 //! so the panel is just a friendly front end over the CLI. Bound to localhost.
 
 use crate::coord::Coordinator;
+use crate::state::{State, Verdict};
 use crate::status;
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use tiny_http::{Header, Method, Response, Server};
+use std::process::{Child, Command, Stdio};
+use tiny_http::{Header, Method, Request, Response, Server};
+
+/// Header the panel's own page sends on every POST. A cross-site form or
+/// fetch can't add a custom header without a CORS preflight (which this
+/// server never approves), so requiring it blocks other web pages from
+/// driving the panel.
+const PANEL_HEADER: &str = "X-Dorker-Panel";
+
+/// Lines of the activity log shown in the panel.
+const LOG_TAIL_LINES: usize = 60;
 
 pub fn run_serve(
     port: u16,
@@ -23,21 +33,59 @@ pub fn run_serve(
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("dorker"));
     let coord_dir = coord.path().to_path_buf();
     let config = config_path.to_string_lossy().to_string();
+    let log_path = Path::new(output_dir).join("dorker.log");
+    let mut children: Vec<Child> = Vec::new();
 
     println!("Dorker control panel: http://{addr}");
     println!("(Leave this running. Open that address in your browser. Ctrl+C to stop the panel.)");
+    println!("Background jobs log to {}", log_path.display());
 
     for req in server.incoming_requests() {
         let method = req.method().clone();
         let raw = req.url().to_string();
         let path = raw.split('?').next().unwrap_or("/").to_string();
 
+        if let Err(why) = check_request(&req, port) {
+            let _ = req.respond(Response::from_string(why).with_status_code(403));
+            continue;
+        }
+        let mut spawn = |args: Vec<String>| {
+            if let Some(c) = spawn_child(&exe, &coord_dir, &args, &log_path) {
+                children.push(c);
+            }
+        };
+
         match (&method, path.as_str()) {
             (Method::Get, "/") => {
                 respond_html(req, PAGE);
             }
             (Method::Get, "/api/status") => {
-                respond_json(req, &status_json(coord, output_dir, &config));
+                children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+                respond_json(req, &status_json(coord, output_dir, &config, children.len()));
+            }
+            (Method::Get, "/api/log") => {
+                let text = tail(&log_path, LOG_TAIL_LINES);
+                let header =
+                    Header::from_bytes(&b"Content-Type"[..], &b"text/plain; charset=utf-8"[..]).unwrap();
+                let _ = req.respond(Response::from_string(text).with_header(header));
+            }
+            (Method::Post, "/api/review") => {
+                let mut body = String::new();
+                let mut req = req;
+                let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
+                let v: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
+                let host = v.get("host").and_then(|x| x.as_str()).unwrap_or("").trim();
+                let verdict = v.get("verdict").and_then(|x| x.as_str()).unwrap_or("");
+                let parsed = if verdict == "clear" { None } else { Verdict::parse(verdict) };
+                if host.is_empty() || (parsed.is_none() && verdict != "clear") {
+                    respond_json(req, r#"{"ok":false,"msg":"Missing site or verdict."}"#);
+                } else {
+                    match State::open(Path::new(output_dir)).set_review(host, parsed) {
+                        Ok(_) => respond_json(req, r#"{"ok":true,"msg":"Review saved."}"#),
+                        Err(_) => respond_json(req, r#"{"ok":false,"msg":"Could not save the review."}"#),
+                    }
+                }
             }
             (Method::Post, "/api/setup") => {
                 let mut body = String::new();
@@ -52,12 +100,12 @@ pub fn run_serve(
                     Ok(_) => respond_json(req, r#"{"ok":true,"msg":"Settings saved."}"#),
                     Err(e) => respond_json(
                         req,
-                        &format!(r#"{{"ok":false,"msg":"Could not save: {}"}}"#, e),
+                        &serde_json::json!({"ok": false, "msg": format!("Could not save: {e}")}).to_string(),
                     ),
                 }
             }
             (Method::Post, "/api/discover") => {
-                spawn_child(&exe, &coord_dir, &["discover", "--config", &config, "--enqueue"]);
+                spawn(strings(&["discover", "--config", &config, "--enqueue"]));
                 respond_json(req, r#"{"ok":true,"msg":"Discovery started."}"#);
             }
             (Method::Post, "/api/auto") => {
@@ -66,8 +114,17 @@ pub fn run_serve(
                     args.push("--max-positives".into());
                     args.push(n.to_string());
                 }
-                spawn_child_owned(&exe, &coord_dir, &args);
-                respond_json(req, r#"{"ok":true,"msg":"Auto run started."}"#);
+                let every = query_num(&raw, "every");
+                if let Some(m) = every {
+                    args.push("--every".into());
+                    args.push(m.to_string());
+                }
+                spawn(args);
+                let msg = match every {
+                    Some(m) => format!("Continuous run started (a new round every {m} min)."),
+                    None => "Auto run started.".to_string(),
+                };
+                respond_json(req, &serde_json::json!({"ok": true, "msg": msg}).to_string());
             }
             (Method::Post, "/api/worker") => {
                 let mut args = vec![
@@ -80,7 +137,7 @@ pub fn run_serve(
                     args.push("--max-positives".into());
                     args.push(n.to_string());
                 }
-                spawn_child_owned(&exe, &coord_dir, &args);
+                spawn(args);
                 respond_json(req, r#"{"ok":true,"msg":"Worker started (watching the queue)."}"#);
             }
             (Method::Post, "/api/scan-url") => {
@@ -92,7 +149,7 @@ pub fn run_serve(
                     respond_json(req, r#"{"ok":false,"msg":"Enter a URL first."}"#);
                 } else {
                     coord.enqueue(&url);
-                    spawn_child(&exe, &coord_dir, &["work", "--config", &config]);
+                    spawn(strings(&["work", "--config", &config]));
                     respond_json(req, r#"{"ok":true,"msg":"Scanning that site…"}"#);
                 }
             }
@@ -136,25 +193,57 @@ pub fn run_serve(
     Ok(())
 }
 
-fn status_json(coord: &Coordinator, output_dir: &str, config_path: &str) -> String {
+/// Reject requests that didn't come from the panel's own page: the Host must
+/// be this loopback address (defeats DNS rebinding), and every POST must carry
+/// the panel header and, if the browser sent one, a matching Origin.
+fn check_request(req: &Request, port: u16) -> std::result::Result<(), &'static str> {
+    let header = |name: &str| {
+        req.headers()
+            .iter()
+            .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+            .map(|h| h.value.as_str().to_string())
+    };
+    let allowed = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    match header("Host") {
+        Some(h) if allowed.iter().any(|a| a.eq_ignore_ascii_case(&h)) => {}
+        _ => return Err("forbidden host"),
+    }
+    if *req.method() == Method::Post {
+        if header(PANEL_HEADER).is_none() {
+            return Err("missing panel header");
+        }
+        if let Some(origin) = header("Origin") {
+            if !allowed.iter().any(|a| origin.eq_ignore_ascii_case(&format!("http://{a}"))) {
+                return Err("forbidden origin");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn status_json(coord: &Coordinator, output_dir: &str, config_path: &str, jobs: usize) -> String {
     let (pending, processing) = coord.queue_counts();
     let positives = coord.positive_count();
     let sites = coord.list_sites().len();
     let stop = coord.stop_requested();
-    // Discovery is configured when a search_api source has a non-empty key.
+    // Discovery is configured when a search_api source has a key (file or env).
     let configured = crate::config::load_config(Path::new(config_path))
-        .ok()
-        .map(|c| match c.source {
-            crate::config::SourceConfig::SearchApi { api_key, .. } => !api_key.is_empty(),
-            _ => false,
-        })
+        .map(|c| c.source.discovery_ready())
         .unwrap_or(false);
-    let hits = status::top_hits(Path::new(output_dir), 10);
+    let out = Path::new(output_dir);
+    let awaiting = status::awaiting_review(out, 50).len();
+    let hits = status::top_hits(out, 25);
     let hits_json: Vec<serde_json::Value> = hits
         .iter()
         .map(|h| {
             let report = format!("/reports/sites/{}/report.html", crate::coord::safe_host(&h.url));
-            serde_json::json!({"score": h.score, "url": h.url, "report": report})
+            serde_json::json!({
+                "score": h.score,
+                "url": h.url,
+                "host": h.host,
+                "review": h.review.map(|v| v.as_str()),
+                "report": report,
+            })
         })
         .collect();
     serde_json::json!({
@@ -164,9 +253,22 @@ fn status_json(coord: &Coordinator, output_dir: &str, config_path: &str) -> Stri
         "sites": sites,
         "stop": stop,
         "configured": configured,
+        "jobs": jobs,
+        "awaiting": awaiting,
         "hits": hits_json,
     })
     .to_string()
+}
+
+/// The last `n` lines of a text file ("" if it doesn't exist yet).
+fn tail(path: &Path, n: usize) -> String {
+    let txt = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = txt.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| s.to_string()).collect()
 }
 
 fn query_num(raw: &str, key: &str) -> Option<u64> {
@@ -180,16 +282,29 @@ fn query_num(raw: &str, key: &str) -> Option<u64> {
     None
 }
 
-fn spawn_child(exe: &Path, coord_dir: &Path, args: &[&str]) {
+/// Launch a `dorker` subcommand in the background, appending its output to
+/// the activity log so the panel can show what it's doing.
+fn spawn_child(exe: &Path, coord_dir: &Path, args: &[String], log_path: &Path) -> Option<Child> {
     let mut cmd = Command::new(exe);
+    cmd.arg("--color").arg("never");
     cmd.arg("--coordinate").arg(coord_dir);
     cmd.args(args);
-    let _ = cmd.spawn();
-}
-
-fn spawn_child_owned(exe: &Path, coord_dir: &Path, args: &[String]) {
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    spawn_child(exe, coord_dir, &refs);
+    if let Some(dir) = log_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+        use std::io::Write;
+        let _ = writeln!(
+            log,
+            "\n[{}] $ dorker {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            args.join(" ")
+        );
+        if let Ok(err) = log.try_clone() {
+            cmd.stdout(Stdio::from(log)).stderr(Stdio::from(err));
+        }
+    }
+    cmd.spawn().ok()
 }
 
 /// Serve a saved report file under `output_dir` (read-only, no path escapes).
@@ -257,6 +372,13 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
   textarea{width:100%;min-height:68px;font-family:var(--mono);font-size:12px}
   .hit{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);word-break:break-all}
   .hit:first-child{border-top:0}
+  .hit .lbl{flex:none;font-size:13px;color:var(--muted)} .hit .u{flex:1;min-width:0}
+  .hit .acts{flex:none;display:flex;gap:6px;align-items:center}
+  button.small{padding:4px 9px;font-size:12px;border-radius:7px}
+  .tag{font-size:12px;font-weight:700;color:var(--accent)}
+  .log{margin:0;max-height:260px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;
+    padding:10px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-all}
+  @media (max-width:560px){.hit{flex-wrap:wrap}.hit .acts{width:100%}}
   .badge{flex:none;min-width:78px;text-align:center;font-weight:700;font-size:12px;font-family:var(--mono);padding:4px 6px;border-radius:7px}
   .b-vu{background:var(--vu);color:#fff}.b-u{background:var(--u);color:#fff}.b-p{background:var(--p);color:#1a1a1a}
   .b-l{background:var(--l);color:#10280a}.b-vl{background:var(--vl);color:#fff}
@@ -288,6 +410,8 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
       <div class="stat"><b id="s-processing">–</b><span>scanning</span></div>
       <div class="stat"><b id="s-positives">–</b><span>positives</span></div>
       <div class="stat"><b id="s-sites">–</b><span>sites claimed</span></div>
+      <div class="stat"><b id="s-awaiting">–</b><span>awaiting review</span></div>
+      <div class="stat"><b id="s-jobs">–</b><span>jobs running</span></div>
     </div>
   </div>
 
@@ -295,6 +419,7 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
     <h2>Start / Stop</h2>
     <div class="row" style="margin-bottom:12px">
       <label>Stop after <input type="number" id="positives" min="1" placeholder="∞" style="width:64px"> positives</label>
+      <label>Repeat every <input type="number" id="every" min="1" placeholder="once" style="width:72px"> minutes</label>
     </div>
     <div class="row">
       <button class="primary big" onclick="act('/api/auto',true)">▶ Start (find &amp; scan)</button>
@@ -309,7 +434,7 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
       <button onclick="act('/api/discover')">Discover only</button>
       <button onclick="act('/api/worker',true)">Start a worker</button>
       <button onclick="if(confirm('Clear the queue, claims, positives and stop signal?'))act('/api/reset')">Reset everything</button>
-      <button onclick="if(confirm('Shut the control panel down?'))fetch('/api/quit',{method:'POST'}).then(()=>msg('Panel is shutting down — you can close this tab.'))">Quit panel</button>
+      <button onclick="if(confirm('Shut the control panel down?'))fetch('/api/quit',{method:'POST',headers:H}).then(()=>msg('Panel is shutting down — you can close this tab.'))">Quit panel</button>
     </div>
   </div>
 
@@ -328,48 +453,78 @@ const PAGE: &str = r##"<!doctype html><html lang="en"><head><meta charset="utf-8
   </div>
 
   <div class="card">
-    <h2>Top hits</h2>
+    <h2>Top hits — review</h2>
+    <p class="muted" style="margin-top:0">Open a report, then mark the site. Confirmed sites stay listed; false positives are hidden and never re-queued.</p>
     <div id="hits"><p class="muted">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Activity log</h2>
+    <pre id="log" class="log">(nothing yet)</pre>
   </div>
 </div>
 <script>
+  var H={'X-Dorker-Panel':'1'};
+  function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
   function band(s){return s>=91?'b-ac':s>=86?'b-vl':s>=76?'b-l':s>=51?'b-p':s>=26?'b-u':'b-vu'}
   function label(s){return s>=91?'Almost certain':s>=86?'Very likely':s>=76?'Likely':s>=51?'Possible':s>=26?'Unlikely':'Very unlikely'}
   function msg(t){var m=document.getElementById('msg');m.textContent=t;setTimeout(function(){if(m.textContent===t)m.textContent='';},4000)}
-  function positivesQS(){var v=document.getElementById('positives').value;return v?('?positives='+encodeURIComponent(v)):''}
-  function act(path,usePositives){
-    fetch(path+(usePositives?positivesQS():''),{method:'POST'}).then(r=>r.json()).then(d=>{msg(d.msg||'Done.');refresh();}).catch(()=>msg('Request failed.'));
+  function post(path,body){return fetch(path,{method:'POST',headers:H,body:body}).then(r=>r.json())}
+  function runQS(){
+    var p=document.getElementById('positives').value, e=document.getElementById('every').value, q=[];
+    if(p)q.push('positives='+encodeURIComponent(p));
+    if(e)q.push('every='+encodeURIComponent(e));
+    return q.length?('?'+q.join('&')):'';
+  }
+  function act(path,useOpts){
+    post(path+(useOpts?runQS():'')).then(d=>{msg(d.msg||'Done.');refresh();}).catch(()=>msg('Request failed.'));
   }
   function enqueue(){
-    var body=document.getElementById('urls').value;
-    fetch('/api/enqueue',{method:'POST',body:body}).then(r=>r.json()).then(d=>{msg(d.msg||'Queued.');document.getElementById('urls').value='';refresh();}).catch(()=>msg('Request failed.'));
+    post('/api/enqueue',document.getElementById('urls').value).then(d=>{msg(d.msg||'Queued.');document.getElementById('urls').value='';refresh();}).catch(()=>msg('Request failed.'));
   }
   function scanOne(){
     var u=document.getElementById('one').value.trim();
     if(!u){msg('Enter a URL first.');return;}
-    fetch('/api/scan-url',{method:'POST',body:u}).then(r=>r.json()).then(d=>{msg(d.msg||'Scanning…');document.getElementById('one').value='';refresh();}).catch(()=>msg('Request failed.'));
+    post('/api/scan-url',u).then(d=>{msg(d.msg||'Scanning…');document.getElementById('one').value='';refresh();}).catch(()=>msg('Request failed.'));
   }
   function saveSetup(){
-    var payload={api_key:document.getElementById('apikey').value.trim()};
-    fetch('/api/setup',{method:'POST',body:JSON.stringify(payload)}).then(r=>r.json()).then(d=>{msg(d.msg||'Saved.');refresh();}).catch(()=>msg('Request failed.'));
+    post('/api/setup',JSON.stringify({api_key:document.getElementById('apikey').value.trim()})).then(d=>{msg(d.msg||'Saved.');refresh();}).catch(()=>msg('Request failed.'));
   }
+  function review(host,verdict){
+    post('/api/review',JSON.stringify({host:host,verdict:verdict})).then(d=>{msg(d.msg||'Saved.');refresh();}).catch(()=>msg('Request failed.'));
+  }
+  document.getElementById('hits').addEventListener('click',function(ev){
+    var b=ev.target.closest('button[data-verdict]');
+    if(b)review(b.getAttribute('data-host'),b.getAttribute('data-verdict'));
+  });
   function refresh(){
     fetch('/api/status').then(r=>r.json()).then(d=>{
       document.getElementById('s-pending').textContent=d.pending;
       document.getElementById('s-processing').textContent=d.processing;
       document.getElementById('s-positives').textContent=d.positives;
       document.getElementById('s-sites').textContent=d.sites;
+      document.getElementById('s-awaiting').textContent=d.awaiting;
+      document.getElementById('s-jobs').textContent=d.jobs;
       document.getElementById('stopbanner').hidden=!d.stop;
       var cs=document.getElementById('cfgstate');
-      cs.textContent=d.configured?'Auto-discovery is set up ✓':'Auto-discovery not set up — paste a Google key above, or just use “Scan one site”.';
+      cs.textContent=d.configured?'Auto-discovery is set up ✓':'Auto-discovery not set up — paste a Serper key above, or just use “Scan one site”.';
       var h=document.getElementById('hits');
       if(!d.hits||!d.hits.length){h.innerHTML='<p class="muted">No hits yet.</p>';return;}
       h.innerHTML=d.hits.map(function(x){
-        var safe=x.url.replace(/</g,'&lt;');
-        var link=x.report?('<a href="'+x.report+'" target="_blank" rel="noopener">'+safe+'</a>'):('<span class="muted">'+safe+'</span>');
+        var host=esc(x.host);
+        var link='<a href="'+esc(x.report)+'" target="_blank" rel="noopener">'+esc(x.url)+'</a>';
+        var actions=x.review==='confirmed'
+          ?'<span class="tag">confirmed</span><button class="small" data-host="'+host+'" data-verdict="clear">Undo</button>'
+          :'<button class="small" data-host="'+host+'" data-verdict="confirmed">✓ Confirm</button>'+
+           '<button class="small" data-host="'+host+'" data-verdict="false_positive">✗ False positive</button>';
         return '<div class="hit"><span class="badge '+band(x.score)+'">'+x.score+'/100</span>'+
-               '<span>'+label(x.score)+'</span>'+link+'</div>';
+               '<span class="lbl">'+label(x.score)+'</span><span class="u">'+link+'</span><span class="acts">'+actions+'</span></div>';
       }).join('');
+    }).catch(()=>{});
+    fetch('/api/log').then(r=>r.text()).then(t=>{
+      var l=document.getElementById('log'), atEnd=l.scrollTop+l.clientHeight>=l.scrollHeight-4;
+      l.textContent=t||'(nothing yet)';
+      if(atEnd)l.scrollTop=l.scrollHeight;
     }).catch(()=>{});
   }
   refresh(); setInterval(refresh,3000);

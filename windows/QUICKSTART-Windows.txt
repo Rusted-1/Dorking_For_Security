@@ -16,6 +16,11 @@ No WSL, no install needed. Just this folder.
    - Start: find & scan.  Or paste one link into "Scan one site".
    - Click any result to open its full colored report.
    - "Stop after N positives" box: collect a set batch, then it stops.
+   - "Repeat every N minutes" box: keep finding and scanning on a schedule
+     until you press Stop. New rounds skip sites already scanned.
+   - Under Top hits, mark each site "Confirm" or "False positive".
+     False positives are hidden and never scanned again.
+   - The Activity log at the bottom shows what Dorker is doing.
 
 4. To stop: click "Quit panel" in the browser, or close the black window.
 

@@ -26,7 +26,12 @@ path = "candidates.txt"
 # provider = "serper"
 # api_key = "YOUR_SERPER_KEY"
 # cx = ""                      # not used by serper (only google_cse needs it)
-# max_results = 50
+# (Or leave api_key out and set the SERPER_API_KEY environment variable.)
+# max_results = 50             # most new sites to queue per run
+# results_per_query = 10       # 10 = cheapest on credits
+# max_queries_per_run = 25     # credit budget; queries rotate across runs
+# rescan_after_days = 30       # skip sites scanned more recently (0 = never skip)
+# skip_domains = []            # extra domains to never queue (built-in list covers big sites)
 # # Leave queries empty to auto-generate dorks from keywords.json (recommended),
 # # or list your own to override:
 # queries = []

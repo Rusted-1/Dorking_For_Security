@@ -132,7 +132,6 @@ impl Coordinator {
     }
 
     /// The hosts recorded as positives, sorted.
-    #[allow(dead_code)] // used by the forthcoming status view
     pub fn positive_list(&self) -> Vec<String> {
         read_url_files(&self.dir.join("positives"))
     }
@@ -247,7 +246,7 @@ pub fn host_key(url: &str) -> Option<String> {
 
 /// Stable 64-bit FNV-1a hash as a hex filename (deterministic across processes
 /// running the same binary).
-fn hash_name(s: &str) -> String {
+pub(crate) fn hash_name(s: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.bytes() {
         h ^= b as u64;
