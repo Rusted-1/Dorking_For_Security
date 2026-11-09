@@ -75,6 +75,7 @@ try {
 
     $z = Get-SiteReport 8606
     Check 'repaired Chinese keyword matches (ind-2062)' ((Get-HitIds $z) -contains 'ind-2062') ("hits: " + ((Get-HitIds $z) -join ', '))
+    Check 'two heavy indicator phrases flag the Chinese page (score 50+)' ((Get-TopScore $z) -ge 50) "score $(Get-TopScore $z)"
 
     $dead = Get-SiteReport 8607
     Check 'dead site is reported as an error, not a crash' ($dead -and @($dead.results | Where-Object { $_.error }).Count -ge 1)
@@ -93,31 +94,31 @@ try {
     Check 'queries rotate: round 2 uses different searches' ($q2.Count -ge 1 -and @($q2 | Where-Object { $q1 -contains $_ }).Count -eq 0)
 
     # ---- Control panel (HTTP level) -----------------------------------------
-    Section 'Control panel: dorker serve on port 8797'
+    Section 'Control panel: dorker serve on 127.0.0.1:8797'
     $panelArgs = @('--color', 'never', '--coordinate', $Coord, 'serve', '--config', $Cfg, '--port', '8797')
     $panel = Start-Process -FilePath $Exe -ArgumentList (($panelArgs | ForEach-Object { Quote-Arg $_ }) -join ' ') `
         -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
     $status = $null
     for ($i = 0; $i -lt 40 -and -not $status; $i++) {
-        try { $status = (Invoke-WebRequest 'http://localhost:8797/api/status' -UseBasicParsing -TimeoutSec 2).Content | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 250 }
+        try { $status = (Invoke-WebRequest 'http://127.0.0.1:8797/api/status' -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 250 }
     }
     Check 'panel starts and serves status' ($null -ne $status)
     if ($status) {
         Check 'panel lists the flagged site' (@($status.hits | Where-Object { $_.host -eq 'localhost:8601' }).Count -eq 1)
-        Check 'panel counts 1 site awaiting review' ($status.awaiting -eq 1) "awaiting $($status.awaiting)"
+        Check 'panel counts 2 sites awaiting review (8601, 8606)' ($status.awaiting -eq 2) "awaiting $($status.awaiting)"
         $blocked = $false
-        try { Invoke-WebRequest 'http://localhost:8797/api/stop' -Method Post -UseBasicParsing -TimeoutSec 3 | Out-Null }
+        try { Invoke-WebRequest 'http://127.0.0.1:8797/api/stop' -Method Post -UseBasicParsing -TimeoutSec 3 | Out-Null }
         catch { $blocked = ($_.Exception.Response.StatusCode.value__ -eq 403) }
         Check 'panel rejects an action without its header (other websites blocked)' $blocked
         $H = @{ 'X-Dorker-Panel' = '1' }
-        $rv = (Invoke-WebRequest 'http://localhost:8797/api/review' -Method Post -Headers $H -UseBasicParsing `
-            -Body '{"host":"localhost:8605","verdict":"false_positive"}').Content | ConvertFrom-Json
+        $rv = (Invoke-WebRequest 'http://127.0.0.1:8797/api/review' -Method Post -Headers $H -UseBasicParsing `
+            -Body '{"host":"localhost:8606","verdict":"false_positive"}').Content | ConvertFrom-Json
         Check 'panel saves a review' ($rv.ok -eq $true)
-        $s2 = (Invoke-WebRequest 'http://localhost:8797/api/status' -UseBasicParsing).Content | ConvertFrom-Json
-        Check 'false positive disappears from the hit list' (@($s2.hits | Where-Object { $_.host -eq 'localhost:8605' }).Count -eq 0)
-        $log = (Invoke-WebRequest 'http://localhost:8797/api/log' -UseBasicParsing).StatusCode
+        $s2 = (Invoke-WebRequest 'http://127.0.0.1:8797/api/status' -UseBasicParsing).Content | ConvertFrom-Json
+        Check 'false positive disappears from the hit list' (@($s2.hits | Where-Object { $_.host -eq 'localhost:8606' }).Count -eq 0)
+        $log = (Invoke-WebRequest 'http://127.0.0.1:8797/api/log' -UseBasicParsing).StatusCode
         Check 'activity log endpoint answers' ($log -eq 200)
-        try { Invoke-WebRequest 'http://localhost:8797/api/quit' -Method Post -Headers $H -UseBasicParsing -TimeoutSec 3 | Out-Null } catch {}
+        try { Invoke-WebRequest 'http://127.0.0.1:8797/api/quit' -Method Post -Headers $H -UseBasicParsing -TimeoutSec 3 | Out-Null } catch {}
     }
     if (-not $panel.WaitForExit(5000)) { Stop-Process -Id $panel.Id -Force -ErrorAction SilentlyContinue }
 

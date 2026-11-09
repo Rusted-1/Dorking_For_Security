@@ -17,7 +17,7 @@ Every request the fake sites receive is listed in `testlab/out/requests.log`.
 | 8603 | Gardening blog | No hits |
 | 8604 | Club site whose `robots.txt` blocks `/private` | Never fetch `/private/offer.html` |
 | 8605 | Finance chat with a few generic words | Low score (1–49) |
-| 8606 | Page using two of the repaired Chinese keyword phrases | Match `ind-2062` |
+| 8606 | Page using two of the repaired Chinese keyword phrases | Match `ind-2062` and get flagged (65): those indicator phrases weigh 28 and 19 |
 | 8607 | Nothing (a dead site) | Report an error, keep going |
 
 The fake Serper returns all of these, plus a duplicate of 8601 and a
@@ -39,14 +39,14 @@ the panel's review and security checks, and `dorker review`. It ends with
 ## 2. Click through the control panel
 
 Double-click **`Lab-Panel.bat`**. Your browser opens the panel at
-<http://localhost:8787>, and a second window lists every request the fake
+<http://127.0.0.1:8787>, and a second window lists every request the fake
 sites get. Then:
 
 1. **Status** shows zeros. "Auto-discovery is set up ✓" is shown, because the lab key is filled in.
 2. Type `2` in **Stop after N positives**, click **▶ Start**. Watch **jobs running** go to 1 and the **Activity log** fill in.
-3. When it finishes, **Top hits** lists `localhost:8601` near the top. Click it: its report opens in a new tab.
-4. **awaiting review** shows 1. Click **✓ Confirm** on 8601: it shows "confirmed" and the counter drops to 0.
-5. Click **✗ False positive** on another hit: it disappears from the list.
+3. When it finishes, **Top hits** lists `localhost:8601` (98) and `localhost:8606` (65). Click one: its report opens in a new tab.
+4. **awaiting review** shows 2. Click **✓ Confirm** on 8601: it shows "confirmed" and the counter drops to 1.
+5. Click **✗ False positive** on 8606 (it is ordinary software text): it disappears and the counter drops to 0.
 6. Click **▶ Start** again: the log says "Kept 0 new site(s)" because everything was already scanned.
 7. Paste `http://localhost:8603/` into **Scan one site** and click **Scan it**.
 8. Type `1` in **Repeat every N minutes**, click **▶ Start**, then **■ Stop**. The red STOP banner appears; **Reset everything** clears it.

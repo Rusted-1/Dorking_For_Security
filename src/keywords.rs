@@ -34,11 +34,16 @@ pub fn load_keywords(path: &Path) -> Result<Vec<Keyword>> {
 }
 
 /// Text damaged by an encoding mix-up: a replacement character, invisible
-/// C1 control characters, or the "â€" signature of double-encoded UTF-8.
+/// C1 control characters, the "â€" signature of double-encoded UTF-8, or a
+/// UTF-8 lead byte left behind with a lost byte turned into a space.
 fn looks_damaged(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
     s.contains('\u{FFFD}')
         || s.contains("\u{e2}\u{20ac}")
-        || s.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c))
+        || chars.iter().any(|c| ('\u{80}'..='\u{9f}').contains(c))
+        || chars.windows(3).any(|w| {
+            ('\u{c2}'..='\u{f4}').contains(&w[0]) && w[1] == ' ' && ('\u{80}'..='\u{bf}').contains(&w[2])
+        })
 }
 
 /// Fold typographic punctuation to its plain form, so a keyword written with
@@ -370,6 +375,9 @@ mod tests {
     fn spots_double_encoded_text() {
         assert!(looks_damaged("Tesla\u{e2}\u{80}\u{99}s holdings"));
         assert!(looks_damaged("bad \u{FFFD} char"));
+        assert!(looks_damaged("friends\u{e2}\u{20ac}\u{201c}meaning"));
+        assert!(looks_damaged("\u{e5} \u{ac}\u{8f}"));
+        assert!(!looks_damaged("café au lait, à la carte, ±5%"));
         assert!(!looks_damaged("Tesla’s holdings"));
         assert!(!looks_damaged("投资平台"));
     }

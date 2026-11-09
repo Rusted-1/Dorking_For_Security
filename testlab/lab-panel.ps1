@@ -16,12 +16,12 @@ $Coord = Join-Path $Out 'coord'
 Write-Host 'Starting the test lab (fake sites + fake Serper on localhost)...'
 $Server = Start-LabServer -Visible
 try {
-    Write-Host "Starting the control panel at http://localhost:$Port"
+    Write-Host "Starting the control panel at http://127.0.0.1:$Port"
     $panelArgs = @('--coordinate', $Coord, 'serve', '--config', $Cfg, '--port', "$Port")
     $panel = Start-Process -FilePath $Exe -ArgumentList (($panelArgs | ForEach-Object { Quote-Arg $_ }) -join ' ') `
         -WorkingDirectory $RepoRoot -PassThru -NoNewWindow
     Start-Sleep -Seconds 1
-    Start-Process "http://localhost:$Port"
+    Start-Process "http://127.0.0.1:$Port"
     Write-Host ''
     Write-Host 'Test checklist: testlab\README.md (section "Click through the control panel").'
     Write-Host 'Leave this window open. Click "Quit panel" in the browser when you are done.'
