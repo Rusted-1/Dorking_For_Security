@@ -5,6 +5,7 @@ use crate::score;
 use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result};
 use regex::Regex;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -14,7 +15,51 @@ pub fn load_keywords(path: &Path) -> Result<Vec<Keyword>> {
         .with_context(|| format!("reading keywords file {}", path.display()))?;
     let file: KeywordFile = serde_json::from_str(&raw)
         .with_context(|| format!("parsing keywords file {}", path.display()))?;
+    let damaged: Vec<&str> = file
+        .keywords
+        .iter()
+        .filter(|k| looks_damaged(&k.phrase))
+        .map(|k| k.id.as_str())
+        .collect();
+    if !damaged.is_empty() {
+        eprintln!(
+            "Warning: {} keyword(s) in {} contain broken characters and can never match \
+             (re-copy them from the source page): {}",
+            damaged.len(),
+            path.display(),
+            damaged.join(", ")
+        );
+    }
     Ok(file.keywords)
+}
+
+/// Text damaged by an encoding mix-up: a replacement character, invisible
+/// C1 control characters, or the "â€" signature of double-encoded UTF-8.
+fn looks_damaged(s: &str) -> bool {
+    s.contains('\u{FFFD}')
+        || s.contains("\u{e2}\u{20ac}")
+        || s.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c))
+}
+
+/// Fold typographic punctuation to its plain form, so a keyword written with
+/// curly quotes or dashes matches a page that uses straight ones (and the
+/// reverse). Applied to both keywords and the text they're matched against.
+fn fold(s: &str) -> Cow<'_, str> {
+    if s.is_ascii() {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' | '\u{2032}' => out.push('\''),
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{2033}' => out.push('"'),
+            '\u{2010}'..='\u{2015}' | '\u{2212}' => out.push('-'),
+            '\u{2026}' => out.push_str("..."),
+            '\u{00A0}' | '\u{2007}' | '\u{202F}' => out.push(' '),
+            _ => out.push(c),
+        }
+    }
+    Cow::Owned(out)
 }
 
 struct Compiled {
@@ -64,13 +109,13 @@ impl Matcher {
                         .with_context(|| format!("invalid regex for keyword '{}'", kw.id))?,
                 )
             } else if kw.whole_word {
-                let pat = format!(r"(?i)\b{}\b", regex::escape(&kw.phrase));
+                let pat = format!(r"(?i)\b{}\b", regex::escape(&fold(&kw.phrase)));
                 Some(
                     Regex::new(&pat)
                         .with_context(|| format!("building whole-word regex for '{}'", kw.id))?,
                 )
             } else {
-                let lower = kw.phrase.to_lowercase();
+                let lower = fold(&kw.phrase).to_lowercase();
                 let p = *pattern_of.entry(lower.clone()).or_insert_with(|| {
                     patterns.push(lower);
                     owners.push(Vec::new());
@@ -147,6 +192,8 @@ impl Matcher {
     /// terms found in either; any exclusion means the page is treated as
     /// legitimate.
     pub fn scan(&self, url: &str, text: &str) -> (Vec<KeywordHit>, Vec<String>) {
+        let text = fold(text);
+        let text = text.as_ref();
         let in_text = self.plain_hits(&text.to_lowercase());
         let in_url = self.plain_hits(&url.to_lowercase());
         let mut hits = Vec::new();
@@ -306,6 +353,34 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn curly_and_straight_quotes_match_each_other() {
+        let m = Matcher::new(vec![
+            kw("curly", "judge a firm’s financial integrity", false, Target::Content),
+            kw("straight", "it's a \"safe\" bet", false, Target::Content),
+        ])
+        .unwrap();
+        assert_eq!(m.find("http://x/", "how to judge a firm's financial integrity").len(), 1);
+        assert_eq!(m.find("http://x/", "It’s a “safe” bet").len(), 1);
+    }
+
+    #[test]
+    fn spots_double_encoded_text() {
+        assert!(looks_damaged("Tesla\u{e2}\u{80}\u{99}s holdings"));
+        assert!(looks_damaged("bad \u{FFFD} char"));
+        assert!(!looks_damaged("Tesla’s holdings"));
+        assert!(!looks_damaged("投资平台"));
+    }
+
+    #[test]
+    fn shipped_keyword_file_has_no_double_encoding_left() {
+        // Guards against re-importing mojibake: allow only the three known
+        // phrases (ind-1137, ind-2242, ind-2301) whose original bytes were lost.
+        let kws = load_keywords(Path::new("keywords.json")).unwrap();
+        let damaged = kws.iter().filter(|k| looks_damaged(&k.phrase)).count();
+        assert!(damaged <= 3, "{damaged} damaged keyword phrases");
     }
 
     #[test]

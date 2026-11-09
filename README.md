@@ -52,6 +52,15 @@ Dorker runs natively on both Windows and Linux — pick whichever you're on:
 
 Everything (commands, the control panel, reports) works the same on both.
 
+## Try it safely first (offline test lab)
+
+`testlab/` runs Dorker against six fake websites and a fake Serper on your
+own PC, so nothing on the internet is contacted and no credits are used.
+Double-click `testlab\Run-Lab-Test.bat` for the automatic test, or
+`testlab\Lab-Panel.bat` to click through the control panel. See
+[testlab/README.md](testlab/README.md). Every push also runs the lab in CI and
+publishes a ready-to-run **dorker-test-kit** download on the Actions run page.
+
 ## Install (Linux / WSL)
 
 One-time: install WSL on Windows with `wsl --install` (admin PowerShell), then

@@ -10,3 +10,7 @@ keywords.local.json
 .env.*
 *.env
 !.env.example
+
+# Test lab output and the old build used for comparisons
+/testlab/out
+/testlab/old

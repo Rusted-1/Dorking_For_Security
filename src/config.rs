@@ -25,6 +25,17 @@ pub fn write_config_file(
     delay_ms: u64,
     output_dir: &str,
 ) -> Result<()> {
+    // Re-running setup over a test-lab config keeps its fake Serper endpoint,
+    // so the panel's Setup form can't point a lab run at the real API.
+    let test_endpoint = load_config(path).ok().and_then(|c| match c.source {
+        SourceConfig::SearchApi { serper_endpoint, .. } if serper_endpoint != d_serper_endpoint() => {
+            Some(serper_endpoint)
+        }
+        _ => None,
+    });
+    let endpoint_line = test_endpoint
+        .map(|e| format!("serper_endpoint = {}\n", toml_str(&e)))
+        .unwrap_or_default();
     let source = if !api_key.is_empty() {
         // `cx` is only used by google_cse; harmless (empty) for other providers.
         format!(
@@ -37,7 +48,7 @@ pub fn write_config_file(
              # Don't re-scan a site scanned within this many days (0 = always re-scan).\nrescan_after_days = 30\n\
              # Extra domains to never queue (a built-in list already skips big\n\
              # legitimate sites like wikipedia.org, reddit.com, .gov, .edu).\nskip_domains = []\n\
-             # queries empty = auto-build dorks from keywords.json\nqueries = []\n",
+             # queries empty = auto-build dorks from keywords.json\nqueries = []\n{endpoint_line}",
             provider = toml_str(provider),
             api_key = toml_str(api_key),
             cx = toml_str(cx),
@@ -141,6 +152,10 @@ pub enum SourceConfig {
         /// Extra domains never to queue, on top of the built-in skip list.
         #[serde(default)]
         skip_domains: Vec<String>,
+        /// Where Serper requests go. Only the offline test lab changes this
+        /// (to its fake Serper on localhost).
+        #[serde(default = "d_serper_endpoint")]
+        serper_endpoint: String,
         /// The dork queries to run.
         #[serde(default)]
         queries: Vec<String>,
@@ -159,6 +174,9 @@ fn d_max_queries_per_run() -> usize {
 fn d_rescan_after_days() -> u64 {
     30
 }
+pub fn d_serper_endpoint() -> String {
+    "https://google.serper.dev/search".to_string()
+}
 
 impl SourceConfig {
     /// A Serper discovery source with every setting at its default.
@@ -172,6 +190,7 @@ impl SourceConfig {
             max_queries_per_run: d_max_queries_per_run(),
             rescan_after_days: d_rescan_after_days(),
             skip_domains: vec![],
+            serper_endpoint: d_serper_endpoint(),
             queries: vec![],
         }
     }
@@ -210,10 +229,11 @@ pub fn load_config(path: &Path) -> Result<Config> {
         .with_context(|| format!("reading config file {}", path.display()))?;
     let mut cfg: Config =
         toml::from_str(&raw).with_context(|| format!("parsing config file {}", path.display()))?;
-    if let (Some(key), SourceConfig::SearchApi { provider, api_key, .. }) =
+    if let (Some(key), SourceConfig::SearchApi { provider, api_key, serper_endpoint, .. }) =
         (env_key, &mut cfg.source)
     {
-        if provider == "serper" {
+        // Never hand the real key to a test endpoint.
+        if provider == "serper" && *serper_endpoint == d_serper_endpoint() {
             *api_key = key;
         }
     }
@@ -239,6 +259,28 @@ mod tests {
                 assert_eq!(api_key, "ab\"c\\d");
                 assert_eq!(results_per_query, 10);
                 assert_eq!(max_queries_per_run, 25);
+            }
+            _ => panic!("expected a search_api source"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setup_keeps_a_test_endpoint() {
+        let dir = std::env::temp_dir().join(format!("dorker-cfg-lab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "keywords_file = \"keywords.json\"\n[source]\nkind = \"search_api\"\nprovider = \"serper\"\n\
+             api_key = \"lab\"\nserper_endpoint = \"http://localhost:8600/search\"\n",
+        )
+        .unwrap();
+        write_config_file(&path, "serper", "new-key", "", 1500, "out").unwrap();
+        let cfg: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        match cfg.source {
+            SourceConfig::SearchApi { serper_endpoint, .. } => {
+                assert_eq!(serper_endpoint, "http://localhost:8600/search")
             }
             _ => panic!("expected a search_api source"),
         }

@@ -55,6 +55,7 @@ pub async fn gather_candidates(
             max_queries_per_run,
             rescan_after_days,
             skip_domains,
+            serper_endpoint,
             queries,
         } => {
             // Use configured queries, or auto-build them from the keywords.
@@ -100,7 +101,11 @@ pub async fn gather_candidates(
                         picked.len(),
                         all.len()
                     );
-                    serper(client, api_key, &picked, *results_per_query, &mut collector, state).await?;
+                    if *serper_endpoint != crate::config::d_serper_endpoint() {
+                        println!("  (using test endpoint {serper_endpoint})");
+                    }
+                    let api = SerperApi { endpoint: serper_endpoint, key: api_key };
+                    serper(client, &api, &picked, *results_per_query, &mut collector, state).await?;
                 }
                 other => bail!(
                     "unknown search provider '{other}'. Supported: serper, google_cse. \
@@ -302,10 +307,16 @@ fn serper_num(results_per_query: usize) -> usize {
     (results_per_query.clamp(10, 100) + 9) / 10 * 10
 }
 
+/// Where and how to call Serper.
+struct SerperApi<'a> {
+    endpoint: &'a str,
+    key: &'a str,
+}
+
 /// Run one Serper query, retrying rate limits and server errors with backoff.
 async fn serper_query(
     client: &reqwest::Client,
-    api_key: &str,
+    api: &SerperApi<'_>,
     query: &str,
     num: usize,
 ) -> std::result::Result<Vec<String>, QueryError> {
@@ -314,8 +325,8 @@ async fn serper_query(
     let mut attempt = 1;
     loop {
         let retry_reason = match client
-            .post("https://google.serper.dev/search")
-            .header("X-API-KEY", api_key)
+            .post(api.endpoint)
+            .header("X-API-KEY", api.key)
             .json(&serde_json::json!({ "q": query, "num": num }))
             .send()
             .await
@@ -367,13 +378,13 @@ async fn serper_query(
 /// so the live call is not exercised by offline tests (the parsing is).
 async fn serper(
     client: &reqwest::Client,
-    api_key: &str,
+    api: &SerperApi<'_>,
     queries: &[String],
     results_per_query: usize,
     collector: &mut Collector,
     state: Option<&State>,
 ) -> Result<()> {
-    if api_key.is_empty() {
+    if api.key.is_empty() {
         bail!(
             "serper source needs an API key: set `api_key` in the config or the {} \
              environment variable (free key at https://serper.dev)",
@@ -388,7 +399,7 @@ async fn serper(
             break;
         }
         spent += 1;
-        match serper_query(client, api_key, query, num).await {
+        match serper_query(client, api, query, num).await {
             Ok(links) => {
                 for u in &links {
                     collector.add(u);

@@ -20,8 +20,11 @@ jobs:
       - name: Unit tests (offline)
         run: cargo test
 
-  # Builds the Windows release binary (no upload) and reports its size.
-  release-size:
+  # Builds the Windows release binary, runs it through the offline test lab
+  # (fake sites + fake Serper on localhost), compares it with the current
+  # release on the same lab, and publishes a downloadable test kit. Nothing
+  # here is released; the windows-build workflow still only runs on main.
+  windows-lab:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +39,37 @@ jobs:
           $b = (Get-Item target/release/dorker.exe).Length
           "dorker.exe: $b bytes ($([math]::Round($b / 1MB, 2)) MB)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           "::notice title=dorker.exe size::$b bytes"
+      # Windows PowerShell 5.1, the same shell the lab uses on a home PC.
+      - name: Offline lab test
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File testlab\run-lab.ps1 -Exe target\release\dorker.exe
+      - name: Upload lab logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-logs
+          path: testlab/out/
+          if-no-files-found: ignore
+      - name: Compare with the current release (informational)
+        continue-on-error: true
+        shell: cmd
+        run: |
+          mkdir testlab\old
+          curl -sSfL -o testlab\old\dorker.exe https://github.com/Rusted-1/Dorking_For_Security/releases/download/windows-build/dorker.exe
+          echo ## Old release vs this build (offline lab) >> "%GITHUB_STEP_SUMMARY%"
+          powershell -NoProfile -ExecutionPolicy Bypass -File testlab\compare.ps1 -Old testlab\old\dorker.exe -New target\release\dorker.exe -Summary "%GITHUB_STEP_SUMMARY%"
+      - name: Assemble test kit
+        shell: pwsh
+        run: |
+          $kit = 'kit'
+          New-Item -ItemType Directory $kit | Out-Null
+          Copy-Item target/release/dorker.exe, keywords.json, config.example.toml, README.md $kit
+          Copy-Item testlab $kit -Recurse -Exclude out, old
+          Remove-Item "$kit/testlab/out", "$kit/testlab/old" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item windows $kit -Recurse
+      - name: Upload test kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: dorker-test-kit
+          path: kit/
+          retention-days: 30
