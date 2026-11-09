@@ -18,7 +18,16 @@ jobs:
       - name: Build
         run: cargo build
       - name: Unit tests (offline)
-        run: cargo test
+        run: |
+          set -o pipefail
+          cargo test 2>&1 | tee test.log
+      # Job logs need a GitHub login; annotations are public, so failures
+      # are readable by anyone (and by tools) from the run page.
+      - name: Publish test failures as an annotation
+        if: failure()
+        run: |
+          msg=$(grep -E "^test .* FAILED|^---- |panicked at|assertion|left:|right:|^  [a-z_:]+$" test.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          echo "::error title=Failing unit tests::${msg}"
 
   # Builds the Windows release binary, runs it through the offline test lab
   # (fake sites + fake Serper on localhost), compares it with the current
@@ -43,6 +52,18 @@ jobs:
       - name: Offline lab test
         shell: cmd
         run: powershell -NoProfile -ExecutionPolicy Bypass -File testlab\run-lab.ps1 -Exe target\release\dorker.exe
+      - name: Publish lab output as an annotation
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($f in 'round1.log', 'round2.log') {
+            $p = "testlab/out/$f"
+            if (Test-Path $p) {
+              $t = (Get-Content $p -Tail 60) -join "`n"
+              $t = $t.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+              Write-Host "::warning title=Lab $f (last 60 lines)::$t"
+            }
+          }
       - name: Upload lab logs
         if: always()
         uses: actions/upload-artifact@v4

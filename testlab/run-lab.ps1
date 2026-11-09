@@ -18,7 +18,13 @@ $script:Passed = 0
 
 function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
     if ($Ok) { $script:Passed++; Write-Host ("  PASS  " + $Name) -ForegroundColor Green }
-    else { $script:Failed++; Write-Host ("  FAIL  " + $Name + $(if ($Detail) { "  ($Detail)" })) -ForegroundColor Red }
+    else {
+        $script:Failed++
+        $msg = $Name + $(if ($Detail) { "  ($Detail)" })
+        Write-Host ("  FAIL  " + $msg) -ForegroundColor Red
+        # In GitHub Actions, also raise an annotation (readable without a login).
+        if ($env:GITHUB_ACTIONS) { Write-Host ("::error title=Lab check failed::" + $msg.Replace('%', '%25')) }
+    }
 }
 
 function Section([string]$Title) { Write-Host ''; Write-Host "== $Title" -ForegroundColor Cyan }
@@ -123,6 +129,8 @@ try {
     Check 'review records a verdict' ($rc.Code -eq 0 -and $rc.Output -match 'Marked localhost:8601 as confirmed')
     $rl2 = Invoke-Dorker $Exe @('--color', 'never', 'review', '--config', $Cfg)
     Check 'nothing left awaiting review' ($rl2.Output -match 'Nothing awaiting review')
+} catch {
+    Check 'lab script ran to the end' $false ($_.Exception.Message + ' at line ' + $_.InvocationInfo.ScriptLineNumber)
 } finally {
     Stop-LabServer $Server
 }
