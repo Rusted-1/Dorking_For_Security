@@ -68,3 +68,7 @@ $lines += ('Requests to the fake sites: old {0}, new {1}.' -f $o.Requests, $n.Re
 $lines += ('Total time: old {0:N1}s, new {1:N1}s (6 sites, 150 ms politeness delay per page).' -f $o.Seconds, $n.Seconds)
 $lines | ForEach-Object { Write-Host $_ }
 if ($Summary) { $lines | Add-Content $Summary -Encoding UTF8 }
+# In GitHub Actions, also raise a notice: annotations are readable without a login.
+if ($env:GITHUB_ACTIONS) {
+    Write-Host ('::notice title=Old release vs this build (offline lab)::' + (($lines -join "`n").Replace('%', '%25').Replace("`n", '%0A')))
+}
